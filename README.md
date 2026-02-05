@@ -55,11 +55,9 @@
 Lightning-Line/
 ├── frontend/              # React application
 ├── backend/               # Node.js API server
-├── ml-model/              # Python ML models
+├── ml_model/              # Python ML models
 ├── database/              # SQL schemas and migrations
-├── docker/                # Containerization files
 ├── docs/                  # Documentation
-└── tests/                 # Unit and integration tests
 ```
 
 ## Team Skynet
