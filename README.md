@@ -1,13 +1,10 @@
-Lightning Line
+Lightning Line 
 
 Group Name: Skynet
-Group Members:
- Nathan Hansle (ID: 620141592)
- Ravaughn Marsh (ID:620137495)
- Shevar Roulston (ID: 620163980)
- Chevaughn Williams (ID:620142256)
 
-Project Description: Lightning Line will be a web application, specifically a digital queue
+Project Description
+
+Lightning Line will be a web application, specifically a digital queue
 management system for tax offices. Tax offices are notorious for long, unmanaged waiting
 times and a lack of service prioritization. The system aims to reduce waiting times and
 improve efficiency in day-to-day services.
