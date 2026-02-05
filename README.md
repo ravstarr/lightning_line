@@ -45,10 +45,10 @@
 - **Operational Insights**: Data-driven decision making for resource allocation
 
 ## Development Roadmap
-1. **Phase 1**: Core queue management system (2 months)
-2. **Phase 2**: Admin dashboard and analytics (1.5 months)
-3. **Phase 3**: Machine learning integration (2 months)
-4. **Phase 4**: Mobile app and advanced features (1.5 months)
+1. **Phase 1**: Core queue management system
+2. **Phase 2**: Admin dashboard and analytics
+3. **Phase 3**: Machine learning integration
+4. **Phase 4**: Mobile app and advanced features
 
 ## Repository Structure
 ```
@@ -58,7 +58,6 @@ Lightning-Line/
 ├── ml_model/              # Python ML models
 ├── database/              # SQL schemas and migrations
 ├── docs/                  # Documentation
-```
 
 ## Team Skynet
 *Full-stack developers specializing in web applications, machine learning integration, and real-time systems*
