@@ -1,0 +1,41 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply antialiased font-sans;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-skyblue-600 text-white font-medium rounded-lg hover:bg-skyblue-700 focus:outline-none focus:ring-2 focus:ring-skyblue-500 focus:ring-offset-2 transition duration-200 shadow-sm;
+  }
+  
+  .btn-secondary {
+    @apply px-6 py-3 border border-skyblue-300 text-skyblue-700 font-medium rounded-lg hover:bg-skyblue-50 focus:outline-none focus:ring-2 focus:ring-skyblue-500 focus:ring-offset-2 transition duration-200;
+  }
+  
+  .card {
+    @apply bg-white rounded-xl shadow-lg p-6 border border-aqua-100;
+  }
+  
+  .input-field {
+    @apply w-full px-4 py-3 border border-skyblue-300 rounded-lg focus:ring-2 focus:ring-skyblue-500 focus:border-skyblue-500 transition duration-200;
+  }
+  
+  .badge {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-sm font-medium;
+  }
+  
+  .badge-priority {
+    @apply bg-aqua-100 text-aqua-800;
+  }
+  
+  .badge-regular {
+    @apply bg-skyblue-100 text-skyblue-800;
+  }
+}
