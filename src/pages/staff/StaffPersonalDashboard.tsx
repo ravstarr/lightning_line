@@ -1,7 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { mockTickets, mockCounters } from '../../services/mockData';
 import Logo from '../../components/Logo';
+import {
+  getStaffQueue,
+  getCurrentTicket,
+  updateStaffStatus,
+  callNextCustomer,
+  completeService,
+} from '../../services/api';
 
 const StaffPersonalDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -14,6 +20,20 @@ const StaffPersonalDashboard: React.FC = () => {
   const [showDelayModal, setShowDelayModal] = useState(false);
   const [currentTicket, setCurrentTicket] = useState<any>(null);
   const [myQueue, setMyQueue] = useState<any[]>([]);
+  const [loadingNext, setLoadingNext] = useState(false);
+
+  const refreshQueue = useCallback(async () => {
+    try {
+      const [queueRes, ticketRes] = await Promise.all([
+        getStaffQueue(),
+        getCurrentTicket(),
+      ]);
+      setMyQueue(queueRes.data.tickets || []);
+      setCurrentTicket(ticketRes.data.ticket || null);
+    } catch (err) {
+      console.error('Error refreshing queue:', err);
+    }
+  }, []);
 
   useEffect(() => {
     const staffData = localStorage.getItem('currentStaff');
@@ -21,31 +41,18 @@ const StaffPersonalDashboard: React.FC = () => {
       navigate('/staff/login');
       return;
     }
-
     const parsedStaff = JSON.parse(staffData);
     setStaff(parsedStaff);
+    setStatus(parsedStaff.status || 'active');
+    refreshQueue();
 
-    // Get counter info
-    const counter = mockCounters.find(c => c.id === parsedStaff.counterId);
-    if (counter) {
-      setStatus(counter.status as any);
-
-      // Get current ticket
-      if (counter.currentTicket) {
-        const ticket = mockTickets.find(t => t.queueNumber === counter.currentTicket);
-        setCurrentTicket(ticket);
-      }
-
-      // Get queue for this counter's service types
-      const queue = mockTickets.filter(t =>
-        counter.serviceTypes.includes(t.serviceType as any) &&
-        t.status === 'waiting'
-      );
-      setMyQueue(queue);
-    }
-  }, [navigate]);
+    // Poll every 15 seconds for live updates
+    const interval = setInterval(refreshQueue, 15000);
+    return () => clearInterval(interval);
+  }, [navigate, refreshQueue]);
 
   const handleLogout = () => {
+    localStorage.removeItem('authToken');
     localStorage.removeItem('currentStaff');
     navigate('/staff/login');
   };
@@ -56,35 +63,59 @@ const StaffPersonalDashboard: React.FC = () => {
     } else if (newStatus === 'delayed') {
       setShowDelayModal(true);
     } else {
-      setStatus(newStatus);
+      setStatus('active');
+      updateStaffStatus('active').catch(console.error);
     }
   };
 
-  const confirmBreak = () => {
-    setStatus('break');
-    setShowBreakModal(false);
-    setCurrentTicket(null);
-    // In real app, this would notify the backend
-  };
-
-  const confirmDelay = () => {
-    setStatus('delayed');
-    setShowDelayModal(false);
-    // In real app, this would notify the backend and update wait times
-  };
-
-  const callNextCustomer = () => {
-    if (myQueue.length > 0) {
-      const nextTicket = myQueue[0];
-      setCurrentTicket(nextTicket);
-      setMyQueue(myQueue.slice(1));
-      // In real app, this would update the backend
+  const confirmBreak = async () => {
+    try {
+      await updateStaffStatus('break', breakReason || undefined);
+      setStatus('break');
+      setCurrentTicket(null);
+    } catch (err) {
+      console.error('Error setting break:', err);
+    } finally {
+      setShowBreakModal(false);
     }
   };
 
-  const completeService = () => {
-    setCurrentTicket(null);
-    // In real app, this would mark ticket as completed in backend
+  const confirmDelay = async () => {
+    try {
+      await updateStaffStatus('delayed', delayReason, delayMinutes);
+      setStatus('delayed');
+    } catch (err) {
+      console.error('Error setting delay:', err);
+    } finally {
+      setShowDelayModal(false);
+    }
+  };
+
+  const handleCallNext = async () => {
+    if (myQueue.length === 0 || status !== 'active') return;
+    setLoadingNext(true);
+    try {
+      const res = await callNextCustomer();
+      if (res.data.ticket) {
+        setCurrentTicket(res.data.ticket);
+        setMyQueue((prev) => prev.filter((t) => t.id !== res.data.ticket.id));
+      }
+    } catch (err) {
+      console.error('Error calling next:', err);
+    } finally {
+      setLoadingNext(false);
+    }
+  };
+
+  const handleComplete = async () => {
+    if (!currentTicket) return;
+    try {
+      await completeService(currentTicket.id);
+      setCurrentTicket(null);
+      await refreshQueue();
+    } catch (err) {
+      console.error('Error completing service:', err);
+    }
   };
 
   if (!staff) return null;
@@ -105,9 +136,9 @@ const StaffPersonalDashboard: React.FC = () => {
             <div className="text-right mr-4">
               <p className="text-sm text-skyblue-300">Status</p>
               <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                status === 'active' ? 'bg-green-800 text-green-200' :
-                status === 'break' ? 'bg-skyblue-800 text-skyblue-200' :
-                'bg-yellow-800 text-yellow-200'
+                status === 'active'  ? 'bg-green-800 text-green-200' :
+                status === 'break'   ? 'bg-skyblue-800 text-skyblue-200' :
+                                       'bg-yellow-800 text-yellow-200'
               }`}>
                 {status.charAt(0).toUpperCase() + status.slice(1)}
               </span>
@@ -143,17 +174,19 @@ const StaffPersonalDashboard: React.FC = () => {
                   <div className="flex justify-between border-b border-skyblue-700 pb-2">
                     <span className="text-skyblue-300">Priority:</span>
                     <span className={`capitalize font-medium ${
-                      currentTicket.priorityLevel === 'senior' || currentTicket.priorityLevel === 'disabled' 
-                        ? 'text-green-400' 
+                      currentTicket.priorityLevel === 'senior' || currentTicket.priorityLevel === 'disabled'
+                        ? 'text-green-400'
                         : 'text-white'
                     }`}>
                       {currentTicket.priorityLevel}
                     </span>
                   </div>
-                  <div className="flex justify-between border-b border-skyblue-700 pb-2">
-                    <span className="text-skyblue-300">TRN:</span>
-                    <span className="text-white font-mono">{currentTicket.trn}</span>
-                  </div>
+                  {currentTicket.trn && (
+                    <div className="flex justify-between border-b border-skyblue-700 pb-2">
+                      <span className="text-skyblue-300">TRN:</span>
+                      <span className="text-white font-mono">{currentTicket.trn}</span>
+                    </div>
+                  )}
                   {currentTicket.phone && (
                     <div className="flex justify-between border-b border-skyblue-700 pb-2">
                       <span className="text-skyblue-300">Phone:</span>
@@ -163,7 +196,7 @@ const StaffPersonalDashboard: React.FC = () => {
                 </div>
 
                 <button
-                  onClick={completeService}
+                  onClick={handleComplete}
                   className="w-full py-3 bg-green-800 hover:bg-green-700 text-white rounded-lg font-medium transition"
                 >
                   Complete Service
@@ -178,15 +211,15 @@ const StaffPersonalDashboard: React.FC = () => {
                 </div>
                 <p className="text-skyblue-400 mb-4">No customer being served</p>
                 <button
-                  onClick={callNextCustomer}
-                  disabled={myQueue.length === 0 || status !== 'active'}
+                  onClick={handleCallNext}
+                  disabled={myQueue.length === 0 || status !== 'active' || loadingNext}
                   className={`px-6 py-3 rounded-lg font-medium transition ${
-                    myQueue.length === 0 || status !== 'active'
+                    myQueue.length === 0 || status !== 'active' || loadingNext
                       ? 'bg-gray-700 text-skyblue-400 cursor-not-allowed'
                       : 'bg-skyblue-800 hover:bg-skyblue-700 text-white'
                   }`}
                 >
-                  Call Next Customer
+                  {loadingNext ? 'Calling...' : 'Call Next Customer'}
                 </button>
               </div>
             )}
@@ -198,36 +231,21 @@ const StaffPersonalDashboard: React.FC = () => {
             <div className="bg-darkblue-800 rounded-lg shadow p-6 border border-skyblue-700">
               <h2 className="text-xl font-semibold mb-4 text-white">Status Controls</h2>
               <div className="grid grid-cols-3 gap-3">
-                <button
-                  onClick={() => handleStatusChange('active')}
-                  className={`py-3 rounded-lg font-medium transition ${
-                    status === 'active'
-                      ? 'bg-green-800 text-white'
-                      : 'bg-darkblue-700 text-skyblue-200 hover:bg-darkblue-600'
-                  }`}
-                >
-                  Active
-                </button>
-                <button
-                  onClick={() => handleStatusChange('break')}
-                  className={`py-3 rounded-lg font-medium transition ${
-                    status === 'break'
-                      ? 'bg-skyblue-800 text-white'
-                      : 'bg-darkblue-700 text-skyblue-200 hover:bg-darkblue-600'
-                  }`}
-                >
-                  On Break
-                </button>
-                <button
-                  onClick={() => handleStatusChange('delayed')}
-                  className={`py-3 rounded-lg font-medium transition ${
-                    status === 'delayed'
-                      ? 'bg-yellow-800 text-white'
-                      : 'bg-darkblue-700 text-skyblue-200 hover:bg-darkblue-600'
-                  }`}
-                >
-                  Delayed
-                </button>
+                {(['active', 'break', 'delayed'] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => handleStatusChange(s)}
+                    className={`py-3 rounded-lg font-medium transition ${
+                      status === s
+                        ? s === 'active'  ? 'bg-green-800 text-white'
+                        : s === 'break'   ? 'bg-skyblue-800 text-white'
+                                          : 'bg-yellow-800 text-white'
+                        : 'bg-darkblue-700 text-skyblue-200 hover:bg-darkblue-600'
+                    }`}
+                  >
+                    {s === 'active' ? 'Active' : s === 'break' ? 'On Break' : 'Delayed'}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -316,9 +334,7 @@ const StaffPersonalDashboard: React.FC = () => {
           <div className="bg-darkblue-900 rounded-lg p-6 max-w-md w-full border border-skyblue-700">
             <h3 className="text-xl font-bold text-white mb-4">Report Delay</h3>
             <div className="mb-4">
-              <label className="block text-sm font-medium text-skyblue-200 mb-2">
-                Reason
-              </label>
+              <label className="block text-sm font-medium text-skyblue-200 mb-2">Reason</label>
               <select
                 value={delayReason}
                 onChange={(e) => setDelayReason(e.target.value)}
@@ -374,4 +390,3 @@ const StaffPersonalDashboard: React.FC = () => {
 };
 
 export default StaffPersonalDashboard;
-

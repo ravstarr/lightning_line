@@ -1,32 +1,33 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../../components/Logo';
+import { loginStaff } from '../../services/api';
 
 const StaffLoginPage: React.FC = () => {
   const navigate = useNavigate();
   const [staffId, setStaffId] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  // Mock staff credentials
-  const mockStaff = [
-    { id: '1', name: 'John Smith', password: 'staff123', counterId: 1 },
-    { id: '2', name: 'Sarah Johnson', password: 'staff123', counterId: 2 },
-    { id: '3', name: 'Michael Brown', password: 'staff123', counterId: 3 },
-    { id: '4', name: 'Lisa Chen', password: 'staff123', counterId: 4 },
-  ];
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    setLoading(true);
 
-    const staff = mockStaff.find(s => s.id === staffId && s.password === password);
+    try {
+      const response = await loginStaff(staffId, password);
+      const { token, staff } = response.data;
 
-    if (staff) {
-      // Store staff info in localStorage (temporary until backend is ready)
+      localStorage.setItem('authToken', token);
       localStorage.setItem('currentStaff', JSON.stringify(staff));
+
       navigate('/staff/dashboard');
-    } else {
-      setError('Invalid staff ID or password');
+    } catch (err: any) {
+      const msg = err.response?.data?.error || 'Invalid staff ID or password';
+      setError(msg);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -48,10 +49,7 @@ const StaffLoginPage: React.FC = () => {
               type="text"
               id="staffId"
               value={staffId}
-              onChange={(e) => {
-                setStaffId(e.target.value);
-                setError('');
-              }}
+              onChange={(e) => { setStaffId(e.target.value); setError(''); }}
               placeholder="Enter your staff ID"
               className="w-full px-4 py-3 border border-skyblue-600 rounded-lg focus:ring-2 focus:ring-skyblue-500 focus:border-skyblue-500 transition bg-darkblue-700 text-white placeholder-skyblue-400"
               required
@@ -66,10 +64,7 @@ const StaffLoginPage: React.FC = () => {
               type="password"
               id="password"
               value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                setError('');
-              }}
+              onChange={(e) => { setPassword(e.target.value); setError(''); }}
               placeholder="Enter your password"
               className="w-full px-4 py-3 border border-skyblue-600 rounded-lg focus:ring-2 focus:ring-skyblue-500 focus:border-skyblue-500 transition bg-darkblue-700 text-white placeholder-skyblue-400"
               required
@@ -84,9 +79,10 @@ const StaffLoginPage: React.FC = () => {
 
           <button
             type="submit"
-            className="w-full py-3 px-4 bg-skyblue-600 hover:bg-skyblue-700 text-white rounded-lg font-medium transition shadow-md"
+            disabled={loading}
+            className="w-full py-3 px-4 bg-skyblue-600 hover:bg-skyblue-700 disabled:opacity-60 text-white rounded-lg font-medium transition shadow-md"
           >
-            Login
+            {loading ? 'Signing in...' : 'Login'}
           </button>
 
           <div className="text-center pt-4">
@@ -113,4 +109,3 @@ const StaffLoginPage: React.FC = () => {
 };
 
 export default StaffLoginPage;
-

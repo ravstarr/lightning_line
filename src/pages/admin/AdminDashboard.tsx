@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { mockTickets, mockCounters } from '../../services/mockData';
 import Logo from '../../components/Logo';
+import { getAdminStats, getAdminCounters, getAdminTickets } from '../../services/api';
 
 const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -9,41 +9,47 @@ const AdminDashboard: React.FC = () => {
     try {
       const saved = localStorage.getItem('currentAdmin');
       return saved ? JSON.parse(saved) : null;
-    } catch (e) {
-      console.error('Error parsing admin data', e);
+    } catch {
       return null;
     }
   });
   const [activeTab, setActiveTab] = useState<'overview' | 'staff' | 'customers'>('overview');
-  const [counters] = useState(mockCounters || []);
-  const [tickets] = useState(mockTickets || []);
+  const [counters, setCounters] = useState<any[]>([]);
+  const [tickets, setTickets] = useState<any[]>([]);
+  const [stats, setStats] = useState({ waiting: 0, serving: 0, completed: 0, priority: 0 });
   const [selectedStaff, setSelectedStaff] = useState<any>(null);
   const [showStaffModal, setShowStaffModal] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    try {
+      const [statsRes, countersRes, ticketsRes] = await Promise.all([
+        getAdminStats(),
+        getAdminCounters(),
+        getAdminTickets(),
+      ]);
+      setStats(statsRes.data);
+      setCounters(countersRes.data.counters || []);
+      setTickets(ticketsRes.data.tickets || []);
+    } catch (err) {
+      console.error('Error fetching admin data:', err);
+    }
+  }, []);
 
   useEffect(() => {
     if (!admin) {
       navigate('/admin/login');
+      return;
     }
-  }, [admin, navigate]);
+    fetchData();
+    const interval = setInterval(fetchData, 15000);
+    return () => clearInterval(interval);
+  }, [admin, navigate, fetchData]);
 
   const handleLogout = () => {
+    localStorage.removeItem('authToken');
     localStorage.removeItem('currentAdmin');
     navigate('/admin/login');
   };
-
-  const getQueueStats = () => {
-    const waiting = tickets.filter(t => t.status === 'waiting').length;
-    const serving = tickets.filter(t => t.status === 'serving').length;
-    const completed = tickets.filter(t => t.status === 'completed').length;
-    const priority = tickets.filter(t =>
-      (t.priorityLevel === 'senior' || t.priorityLevel === 'disabled') &&
-      t.status === 'waiting'
-    ).length;
-
-    return { waiting, serving, completed, priority };
-  };
-
-  const stats = getQueueStats();
 
   if (!admin) {
     return (
@@ -68,106 +74,60 @@ const AdminDashboard: React.FC = () => {
               <p className="text-skyblue-300">{admin.name}</p>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 border border-skyblue-600 text-skyblue-200 rounded-lg hover:bg-darkblue-700 transition"
-          >
-            Logout
-          </button>
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={fetchData}
+              className="px-3 py-2 border border-skyblue-600 text-skyblue-200 rounded-lg hover:bg-darkblue-700 transition text-sm"
+            >
+              Refresh
+            </button>
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2 border border-skyblue-600 text-skyblue-200 rounded-lg hover:bg-darkblue-700 transition"
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
-          <div className="bg-darkblue-800 border border-skyblue-700 rounded-lg p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-skyblue-300 mb-1">Waiting</p>
-                <p className="text-3xl font-bold text-skyblue-400">{stats.waiting}</p>
-              </div>
-              <div className="bg-skyblue-900 p-3 rounded-lg">
-                <svg className="w-8 h-8 text-skyblue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-darkblue-800 border border-skyblue-700 rounded-lg p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-skyblue-300 mb-1">Being Served</p>
-                <p className="text-3xl font-bold text-aqua-400">{stats.serving}</p>
-              </div>
-              <div className="bg-aqua-900 p-3 rounded-lg">
-                <svg className="w-8 h-8 text-aqua-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
+          {[
+            { label: 'Waiting',      value: stats.waiting,   color: 'text-skyblue-400', bg: 'bg-skyblue-900' },
+            { label: 'Being Served', value: stats.serving,   color: 'text-aqua-400',    bg: 'bg-aqua-900' },
+            { label: 'Completed',    value: stats.completed, color: 'text-aqua-400',    bg: 'bg-aqua-900' },
+            { label: 'Priority Queue', value: stats.priority, color: 'text-yellow-400', bg: 'bg-yellow-900' },
+          ].map(({ label, value, color, bg }) => (
+            <div key={label} className="bg-darkblue-800 border border-skyblue-700 rounded-lg p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-skyblue-300 mb-1">{label}</p>
+                  <p className={`text-3xl font-bold ${color}`}>{value}</p>
+                </div>
+                <div className={`${bg} p-3 rounded-lg`}>
+                  <div className={`w-8 h-8 ${color}`} />
+                </div>
               </div>
             </div>
-          </div>
-
-          <div className="bg-darkblue-800 border border-skyblue-700 rounded-lg p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-skyblue-300 mb-1">Completed</p>
-                <p className="text-3xl font-bold text-aqua-400">{stats.completed}</p>
-              </div>
-              <div className="bg-aqua-900 p-3 rounded-lg">
-                <svg className="w-8 h-8 text-aqua-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-darkblue-800 border border-skyblue-700 rounded-lg p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-skyblue-300 mb-1">Priority Queue</p>
-                <p className="text-3xl font-bold text-yellow-400">{stats.priority}</p>
-              </div>
-              <div className="bg-yellow-900 p-3 rounded-lg">
-                <svg className="w-8 h-8 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
-              </div>
-            </div>
-          </div>
+          ))}
         </div>
 
         {/* Tabs */}
         <div className="bg-darkblue-800 border border-skyblue-700 rounded-lg mb-6">
           <div className="flex border-b border-skyblue-700">
-            <button
-              onClick={() => setActiveTab('overview')}
-              className={`flex-1 py-4 px-6 font-medium transition ${
-                activeTab === 'overview'
-                  ? 'text-aqua-400 border-b-2 border-aqua-400'
-                  : 'text-skyblue-300 hover:text-skyblue-200'
-              }`}
-            >
-              Overview
-            </button>
-            <button
-              onClick={() => setActiveTab('staff')}
-              className={`flex-1 py-4 px-6 font-medium transition ${
-                activeTab === 'staff'
-                  ? 'text-aqua-400 border-b-2 border-aqua-400'
-                  : 'text-skyblue-300 hover:text-skyblue-200'
-              }`}
-            >
-              Staff Management
-            </button>
-            <button
-              onClick={() => setActiveTab('customers')}
-              className={`flex-1 py-4 px-6 font-medium transition ${
-                activeTab === 'customers'
-                  ? 'text-aqua-400 border-b-2 border-aqua-400'
-                  : 'text-skyblue-300 hover:text-skyblue-200'
-              }`}
-            >
-              Customer Queue
-            </button>
+            {(['overview', 'staff', 'customers'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`flex-1 py-4 px-6 font-medium transition capitalize ${
+                  activeTab === tab
+                    ? 'text-aqua-400 border-b-2 border-aqua-400'
+                    : 'text-skyblue-300 hover:text-skyblue-200'
+                }`}
+              >
+                {tab === 'staff' ? 'Staff Management' : tab === 'customers' ? 'Customer Queue' : 'Overview'}
+              </button>
+            ))}
           </div>
 
           <div className="p-6">
@@ -177,18 +137,15 @@ const AdminDashboard: React.FC = () => {
                 <div>
                   <h3 className="text-xl font-semibold text-white mb-4">Counter Status</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {counters.map(counter => (
-                      <div
-                        key={counter.id}
-                        className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-4"
-                      >
+                    {counters.map((counter) => (
+                      <div key={counter.id} className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-4">
                         <div className="flex items-center justify-between mb-3">
                           <h4 className="font-semibold text-white">Counter {counter.id}</h4>
                           <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            counter.status === 'active' ? 'bg-green-800 text-green-200' :
+                            counter.status === 'active'  ? 'bg-green-800 text-green-200' :
                             counter.status === 'delayed' ? 'bg-yellow-800 text-yellow-200' :
-                            counter.status === 'break' ? 'bg-skyblue-800 text-skyblue-200' :
-                            'bg-red-800 text-red-200'
+                            counter.status === 'break'   ? 'bg-skyblue-800 text-skyblue-200' :
+                                                           'bg-red-800 text-red-200'
                           }`}>
                             {counter.status}
                           </span>
@@ -205,24 +162,24 @@ const AdminDashboard: React.FC = () => {
                 <div>
                   <h3 className="text-xl font-semibold text-white mb-4">Recent Activity</h3>
                   <div className="space-y-2">
-                    {tickets.slice(0, 5).map(ticket => (
-                      <div
-                        key={ticket.id}
-                        className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-4 flex items-center justify-between"
-                      >
+                    {tickets.slice(0, 5).map((ticket) => (
+                      <div key={ticket.id} className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-4 flex items-center justify-between">
                         <div>
                           <p className="font-medium text-white">{ticket.queueNumber}</p>
                           <p className="text-sm text-skyblue-300 capitalize">{ticket.serviceType}</p>
                         </div>
                         <span className={`px-3 py-1 rounded text-xs font-medium ${
-                          ticket.status === 'waiting' ? 'bg-skyblue-800 text-skyblue-200' :
-                          ticket.status === 'serving' ? 'bg-green-800 text-green-200' :
-                          'bg-gray-700 text-skyblue-200'
+                          ticket.status === 'waiting'   ? 'bg-skyblue-800 text-skyblue-200' :
+                          ticket.status === 'serving'   ? 'bg-green-800 text-green-200' :
+                                                          'bg-gray-700 text-skyblue-200'
                         }`}>
                           {ticket.status}
                         </span>
                       </div>
                     ))}
+                    {tickets.length === 0 && (
+                      <p className="text-skyblue-400 text-center py-8">No tickets today</p>
+                    )}
                   </div>
                 </div>
               </div>
@@ -233,9 +190,6 @@ const AdminDashboard: React.FC = () => {
               <div>
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-xl font-semibold text-white">Staff & Counters</h3>
-                  <button className="px-4 py-2 bg-skyblue-800 hover:bg-blue-700 text-white rounded-lg transition">
-                    Add Staff
-                  </button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full">
@@ -250,31 +204,28 @@ const AdminDashboard: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {counters.map(counter => (
+                      {counters.map((counter) => (
                         <tr key={counter.id} className="border-t border-skyblue-700">
                           <td className="px-4 py-3 text-white">{counter.id}</td>
                           <td className="px-4 py-3 text-white">{counter.staffName}</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              counter.status === 'active' ? 'bg-green-800 text-green-200' :
+                              counter.status === 'active'  ? 'bg-green-800 text-green-200' :
                               counter.status === 'delayed' ? 'bg-yellow-800 text-yellow-200' :
-                              counter.status === 'break' ? 'bg-skyblue-800 text-skyblue-200' :
-                              'bg-red-800 text-red-200'
+                              counter.status === 'break'   ? 'bg-skyblue-800 text-skyblue-200' :
+                                                             'bg-red-800 text-red-200'
                             }`}>
                               {counter.status}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-white">{counter.currentTicket || '-'}</td>
                           <td className="px-4 py-3 text-skyblue-300 text-sm">
-                            {counter.serviceTypes.slice(0, 2).join(', ')}
-                            {counter.serviceTypes.length > 2 && '...'}
+                            {(counter.serviceTypes || []).slice(0, 2).join(', ')}
+                            {(counter.serviceTypes || []).length > 2 && '...'}
                           </td>
                           <td className="px-4 py-3">
                             <button
-                              onClick={() => {
-                                setSelectedStaff(counter);
-                                setShowStaffModal(true);
-                              }}
+                              onClick={() => { setSelectedStaff(counter); setShowStaffModal(true); }}
                               className="text-aqua-400 hover:text-aqua-300 text-sm"
                             >
                               View Details
@@ -293,20 +244,6 @@ const AdminDashboard: React.FC = () => {
               <div>
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-xl font-semibold text-white">All Customers in Queue</h3>
-                  <div className="flex space-x-2">
-                    <select className="px-4 py-2 bg-darkblue-700 border border-skyblue-600 text-white rounded-lg">
-                      <option>All Services</option>
-                      <option>Payments</option>
-                      <option>Documents</option>
-                      <option>Inquiries</option>
-                    </select>
-                    <select className="px-4 py-2 bg-darkblue-700 border border-skyblue-600 text-white rounded-lg">
-                      <option>All Status</option>
-                      <option>Waiting</option>
-                      <option>Serving</option>
-                      <option>Completed</option>
-                    </select>
-                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full">
@@ -316,35 +253,33 @@ const AdminDashboard: React.FC = () => {
                         <th className="px-4 py-3 text-left text-skyblue-200">TRN</th>
                         <th className="px-4 py-3 text-left text-skyblue-200">Service</th>
                         <th className="px-4 py-3 text-left text-skyblue-200">Priority</th>
-                        <th className="px-4 py-3 text-left text-skyblue-200">Position</th>
-                        <th className="px-4 py-3 text-left text-skyblue-200">Wait Time</th>
+                        <th className="px-4 py-3 text-left text-skyblue-200">Wait</th>
                         <th className="px-4 py-3 text-left text-skyblue-200">Status</th>
                         <th className="px-4 py-3 text-left text-skyblue-200">Counter</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {tickets.map(ticket => (
+                      {tickets.map((ticket) => (
                         <tr key={ticket.id} className="border-t border-skyblue-700">
                           <td className="px-4 py-3 text-white font-medium">{ticket.queueNumber}</td>
-                          <td className="px-4 py-3 text-white font-mono text-sm">{ticket.trn}</td>
+                          <td className="px-4 py-3 text-white font-mono text-sm">{ticket.trn || '-'}</td>
                           <td className="px-4 py-3 text-white capitalize">{ticket.serviceType}</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              ticket.priorityLevel === 'senior' || ticket.priorityLevel === 'disabled'
+                              ticket.priorityLevel !== 'regular'
                                 ? 'bg-green-800 text-green-200'
                                 : 'bg-gray-700 text-skyblue-200'
                             }`}>
                               {ticket.priorityLevel}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-white">{ticket.position}</td>
                           <td className="px-4 py-3 text-white">{ticket.estimatedWait} min</td>
                           <td className="px-4 py-3">
                             <span className={`px-2 py-1 rounded text-xs font-medium ${
-                              ticket.status === 'waiting' ? 'bg-skyblue-800 text-skyblue-200' :
-                              ticket.status === 'serving' ? 'bg-green-800 text-green-200' :
+                              ticket.status === 'waiting'   ? 'bg-skyblue-800 text-skyblue-200' :
+                              ticket.status === 'serving'   ? 'bg-green-800 text-green-200' :
                               ticket.status === 'completed' ? 'bg-gray-700 text-skyblue-200' :
-                              'bg-red-800 text-red-200'
+                                                              'bg-red-800 text-red-200'
                             }`}>
                               {ticket.status}
                             </span>
@@ -352,6 +287,13 @@ const AdminDashboard: React.FC = () => {
                           <td className="px-4 py-3 text-white">{ticket.counterAssigned || '-'}</td>
                         </tr>
                       ))}
+                      {tickets.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-8 text-center text-skyblue-400">
+                            No tickets today
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -395,7 +337,7 @@ const AdminDashboard: React.FC = () => {
               <div className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-4">
                 <p className="text-sm text-skyblue-300 mb-2">Service Types</p>
                 <div className="flex flex-wrap gap-2">
-                  {selectedStaff.serviceTypes.map((service: string) => (
+                  {(selectedStaff.serviceTypes || []).map((service: string) => (
                     <span key={service} className="px-3 py-1 bg-skyblue-900 text-skyblue-200 rounded text-sm">
                       {service}
                     </span>
@@ -414,11 +356,11 @@ const AdminDashboard: React.FC = () => {
               )}
 
               <div className="flex space-x-3 pt-4">
-                <button className="flex-1 py-2 bg-skyblue-800 hover:bg-blue-700 text-white rounded-lg transition">
-                  Reassign Counter
-                </button>
-                <button className="flex-1 py-2 border border-red-600 text-red-400 hover:bg-red-900 rounded-lg transition">
-                  Close Counter
+                <button
+                  onClick={() => setShowStaffModal(false)}
+                  className="flex-1 py-2 border border-skyblue-600 text-skyblue-200 rounded-lg hover:bg-darkblue-700 transition"
+                >
+                  Close
                 </button>
               </div>
             </div>
@@ -430,4 +372,3 @@ const AdminDashboard: React.FC = () => {
 };
 
 export default AdminDashboard;
-
