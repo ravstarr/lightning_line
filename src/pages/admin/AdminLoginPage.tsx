@@ -1,28 +1,33 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../../components/Logo';
+import { loginAdmin } from '../../services/api';
 
 const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  // Mock admin credentials
-  const mockAdmin = {
-    username: 'admin',
-    password: 'admin123',
-    name: 'System Administrator'
-  };
-
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    setLoading(true);
 
-    if (username === mockAdmin.username && password === mockAdmin.password) {
-      localStorage.setItem('currentAdmin', JSON.stringify(mockAdmin));
+    try {
+      const response = await loginAdmin(username, password);
+      const { token, admin } = response.data;
+
+      localStorage.setItem('authToken', token);
+      localStorage.setItem('currentAdmin', JSON.stringify(admin));
+
       navigate('/admin/dashboard');
-    } else {
-      setError('Invalid username or password');
+    } catch (err: any) {
+      const msg = err.response?.data?.error || 'Invalid username or password';
+      setError(msg);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -44,10 +49,7 @@ const AdminLoginPage: React.FC = () => {
               type="text"
               id="username"
               value={username}
-              onChange={(e) => {
-                setUsername(e.target.value);
-                setError('');
-              }}
+              onChange={(e) => { setUsername(e.target.value); setError(''); }}
               placeholder="Enter admin username"
               className="w-full px-4 py-3 border border-skyblue-600 rounded-lg focus:ring-2 focus:ring-skyblue-500 focus:border-skyblue-500 transition bg-darkblue-700 text-white placeholder-skyblue-400"
               required
@@ -62,10 +64,7 @@ const AdminLoginPage: React.FC = () => {
               type="password"
               id="password"
               value={password}
-              onChange={(e) => {
-                setPassword(e.target.value);
-                setError('');
-              }}
+              onChange={(e) => { setPassword(e.target.value); setError(''); }}
               placeholder="Enter password"
               className="w-full px-4 py-3 border border-skyblue-600 rounded-lg focus:ring-2 focus:ring-skyblue-500 focus:border-skyblue-500 transition bg-darkblue-700 text-white placeholder-skyblue-400"
               required
@@ -80,9 +79,10 @@ const AdminLoginPage: React.FC = () => {
 
           <button
             type="submit"
-            className="w-full py-3 px-4 bg-skyblue-600 hover:bg-skyblue-700 text-white rounded-lg font-medium transition shadow-md"
+            disabled={loading}
+            className="w-full py-3 px-4 bg-skyblue-600 hover:bg-skyblue-700 disabled:opacity-60 text-white rounded-lg font-medium transition shadow-md"
           >
-            Login as Admin
+            {loading ? 'Signing in...' : 'Login as Admin'}
           </button>
 
           <div className="text-center pt-4">
