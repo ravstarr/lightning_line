@@ -1,18 +1,13 @@
-const mysql = require("mysql2");
+const pool = require("./connection");
 
-const connection = mysql.createConnection({
-  host: "localhost",
-  user: "root",
-  password: "",
-  database: "lightning_line",
-  port: 3307
-});
-
-connection.connect(err => {
-  if (err) {
-    console.error("❌ DB connection failed:", err);
-  } else {
-    console.log("✅ DB connected successfully");
+async function testDatabase() {
+  try {
+    const result = await pool.query("SELECT NOW()");
+    console.log("Database connected successfully");
+    console.log(result.rows[0]);
+  } catch (error) {
+    console.error("Database test failed:", error.message);
   }
-  connection.end();
-});
+}
+
+testDatabase();

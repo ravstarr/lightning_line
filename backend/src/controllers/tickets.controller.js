@@ -1,58 +1,94 @@
-let tickets = [];
+const ticketService = require("../services/tickets.service");
 
-export function createTicket(req, res) {
-  const { service_type, priority_level } = req.body;
-
-  const newTicket = {
-    id: tickets.length + 1,
-    service_type,
-    priority_level,
-    status: "WAITING"
-  };
-
-  tickets.push(newTicket);
-
-  res.json({
-    message: "Ticket created",
-    ticket: newTicket
-  });
-}
-
-export function getQueue(req, res) {
-  res.json(tickets);
-}
-
-export function callNext(req, res) {
-
-  const nextTicket = tickets.find(t => t.status === "WAITING");
-
-  if (!nextTicket) {
-    return res.json({ message: "No tickets waiting" });
+async function createTicket(req, res, next) {
+  try {
+    const ticket = await ticketService.createTicket(req.body);
+    res.status(201).json({ message: "Ticket created successfully", ticket });
+  } catch (error) {
+    next(error);
   }
-
-  nextTicket.status = "CALLED";
-
-  res.json({
-    message: "Next ticket called",
-    ticket: nextTicket
-  });
 }
 
-export function completeTicket(req, res) {
-
-  const ticketId = parseInt(req.params.id);
-
-  const ticket = tickets.find(t => t.id === ticketId);
-
-  if (!ticket) {
-    return res.status(404).json({ message: "Ticket not found" });
+async function getQueue(req, res, next) {
+  try {
+    const queue = await ticketService.getQueue(req.query.branchId);
+    res.json({ message: "Queue retrieved successfully", queue });
+  } catch (error) {
+    next(error);
   }
-
-  ticket.status = "DONE";
-
-  res.json({
-    message: "Ticket completed",
-    ticket: ticket
-  });
-
 }
+
+async function getTicketById(req, res, next) {
+  try {
+    const ticket = await ticketService.getTicketById(req.params.id);
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    res.json({ ticket });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function callNext(req, res, next) {
+  try {
+    const result = await ticketService.callNext(req.body);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function completeTicket(req, res, next) {
+  try {
+    const ticket = await ticketService.completeTicket(req.params.id);
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    res.json({ message: "Ticket completed successfully", ticket });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function delayTicket(req, res, next) {
+  try {
+    const ticket = await ticketService.delayTicket(req.params.id);
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    res.json({ message: "Ticket delayed successfully", ticket });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updatePriority(req, res, next) {
+  try {
+    const ticket = await ticketService.updatePriority(req.params.id, req.body);
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" });
+    }
+
+    res.json({ message: "Ticket priority updated successfully", ticket });
+  } catch (error) {
+    next(error);
+  }
+}
+
+module.exports = {
+  createTicket,
+  getQueue,
+  getTicketById,
+  callNext,
+  completeTicket,
+  delayTicket,
+  updatePriority
+};

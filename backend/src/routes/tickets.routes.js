@@ -1,11 +1,26 @@
-import { Router } from "express";
-import { createTicket, getQueue, callNext, completeTicket } from "../controllers/tickets.controller.js";
+const express = require("express");
+const router = express.Router();
 
-const router = Router();
+const {
+  createTicket,
+  getQueue,
+  getTicketById,
+  callNext,
+  completeTicket,
+  delayTicket,
+  updatePriority
+} = require("../controllers/tickets.controller");
+
+const {
+  protect
+} = require("../middleware/auth.middleware");
 
 router.post("/", createTicket);
 router.get("/queue", getQueue);
-router.post("/call-next", callNext);
-router.post("/:id/complete", completeTicket);
+router.get("/:id", getTicketById);
+router.post("/call-next", protect, callNext);
+router.post("/:id/complete", protect, completeTicket);
+router.post("/:id/delay", delayTicket);
+router.patch("/:id/priority", protect, updatePriority);
 
-export default router;
+module.exports = router;

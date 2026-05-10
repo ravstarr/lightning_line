@@ -1,9 +1,11 @@
-import { Router } from "express";
-
-const router = Router();
+const express = require("express");
+const router = express.Router();
 
 router.get("/", (req, res) => {
-  res.json({ ok: true, service: "lightning-line-api" });
+  res.json({
+    status: "ok",
+    message: "Lightning Line backend is running"
+  });
 });
 
-export default router;
+module.exports = router;
