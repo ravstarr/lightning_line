@@ -71,6 +71,16 @@ router.post('/', async (req, res) => {
     }
 
     const service = serviceResult.rows[0];
+    // Ensure customer record exists before inserting ticket (FK requirement)
+    if (trn) {
+      await pool.query(
+        `INSERT INTO Customers (TRN, phone)
+         VALUES ($1, $2)
+         ON CONFLICT (TRN) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, Customers.phone)`,
+        [trn, phone || null]
+      );
+    }
+
     const level = priorityLevel || 'regular';
     const prefix = priorityPrefix(level);
 
