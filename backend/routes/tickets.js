@@ -1,6 +1,47 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
+const http = require('http');
+
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000';
+
+async function getMLPrediction(serviceType, priorityLevel, queueLength, activeCounters) {
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      service_type:    serviceType,
+      priority_level:  priorityLevel,
+      queue_length:    queueLength,
+      active_counters: activeCounters,
+    });
+
+    const url = new URL(`${ML_SERVICE_URL}/predict`);
+    const options = {
+      hostname: url.hostname,
+      port:     url.port || 8000,
+      path:     '/predict',
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    };
+
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve(Math.round(parsed.estimated_wait_minutes));
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+
+    req.on('error', () => resolve(null));  // fall back to static estimate on failure
+    req.setTimeout(3000, () => { req.destroy(); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
 
 function priorityPrefix(priorityLevel) {
   switch (priorityLevel) {
@@ -49,7 +90,15 @@ router.post('/', async (req, res) => {
     );
     const position = parseInt(posResult.rows[0].count) + 1;
 
-    const wait = estimatedWait || service.estimated_duration;
+    // Get active counter count for ML prediction
+    const counterResult = await pool.query(
+      "SELECT COUNT(*) FROM Staff WHERE status = 'active'"
+    );
+    const activeCounters = Math.max(1, parseInt(counterResult.rows[0].count));
+
+    // Ask ML service for a prediction; fall back to static duration if unavailable
+    const mlWait = await getMLPrediction(serviceType, level, position - 1, activeCounters);
+    const wait = mlWait || estimatedWait || service.estimated_duration;
 
     const insertResult = await pool.query(
       `INSERT INTO QueueTickets
