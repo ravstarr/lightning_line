@@ -26,7 +26,7 @@ export type ServiceType =
 
 export type PriorityLevel = 
   | 'regular'
-  | 'senior'      // 55+
+  | 'senior'      // 65+
   | 'disabled'    // Disability
   | 'emergency';  // Other priority
 

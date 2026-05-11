@@ -35,7 +35,7 @@ const PriorityAccess: React.FC = () => {
             </label>
             <div className="space-y-3">
               {[
-                { id: '55plus', label: 'Age 55+', description: 'Senior citizen priority access' },
+                { id: '65plus', label: 'Age 65+', description: 'Senior citizen priority access' },
                 { id: 'disabled', label: 'Person with Disability', description: 'Mobility or special needs assistance' },
                 { id: 'pregnant', label: 'Pregnant', description: 'Expecting mother priority' },
                 { id: 'veteran', label: 'Military Veteran', description: 'Veteran priority service' },

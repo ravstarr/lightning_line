@@ -2,10 +2,14 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 const { authenticateAdmin } = require('../middleware/auth');
+const { KEYS, cacheGet, cacheSet, invalidateCounters } = require('../config/redis');
 
 // GET /api/admin/stats
 router.get('/stats', authenticateAdmin, async (req, res) => {
   try {
+    const cached = await cacheGet(KEYS.ADMIN_STATS);
+    if (cached) return res.json(cached);
+
     const result = await pool.query(`
       SELECT
         COUNT(*) FILTER (WHERE status = 'waiting')               AS waiting,
@@ -17,12 +21,15 @@ router.get('/stats', authenticateAdmin, async (req, res) => {
     `);
 
     const s = result.rows[0];
-    res.json({
+    const payload = {
       waiting:   parseInt(s.waiting),
       serving:   parseInt(s.serving),
       completed: parseInt(s.completed),
       priority:  parseInt(s.priority),
-    });
+    };
+
+    await cacheSet(KEYS.ADMIN_STATS, payload, 5);
+    res.json(payload);
   } catch (err) {
     console.error('Admin stats error:', err);
     res.status(500).json({ error: 'Server error.' });
@@ -32,6 +39,9 @@ router.get('/stats', authenticateAdmin, async (req, res) => {
 // GET /api/admin/counters
 router.get('/counters', authenticateAdmin, async (req, res) => {
   try {
+    const cached = await cacheGet(KEYS.ADMIN_COUNTERS);
+    if (cached) return res.json(cached);
+
     const result = await pool.query(`
       SELECT
         s.staff_id, s.first_name, s.last_name, s.counter_id, s.role,
@@ -63,7 +73,9 @@ router.get('/counters', authenticateAdmin, async (req, res) => {
         : null,
     }));
 
-    res.json({ counters });
+    const payload = { counters };
+    await cacheSet(KEYS.ADMIN_COUNTERS, payload, 5);
+    res.json(payload);
   } catch (err) {
     console.error('Admin counters error:', err);
     res.status(500).json({ error: 'Server error.' });
@@ -73,8 +85,14 @@ router.get('/counters', authenticateAdmin, async (req, res) => {
 // GET /api/admin/tickets?serviceType=payments&status=waiting
 router.get('/tickets', authenticateAdmin, async (req, res) => {
   const { serviceType, status } = req.query;
+  const noFilters = !serviceType && !status;
 
   try {
+    if (noFilters) {
+      const cached = await cacheGet(KEYS.ADMIN_TICKETS);
+      if (cached) return res.json(cached);
+    }
+
     let query = `
       SELECT qt.*, s.service_key, s.service_name
       FROM QueueTickets qt
@@ -111,7 +129,9 @@ router.get('/tickets', authenticateAdmin, async (req, res) => {
       counterAssigned: t.counter_assigned || null,
     }));
 
-    res.json({ tickets });
+    const payload = { tickets };
+    if (noFilters) await cacheSet(KEYS.ADMIN_TICKETS, payload, 5);
+    res.json(payload);
   } catch (err) {
     console.error('Admin tickets error:', err);
     res.status(500).json({ error: 'Server error.' });
@@ -134,6 +154,7 @@ router.post('/counters/:id/status', authenticateAdmin, async (req, res) => {
     const io = req.app.get('io');
     if (io) io.emit('counter:status', { counterId, status });
 
+    invalidateCounters().catch(console.error);
     res.json({ success: true });
   } catch (err) {
     console.error('Admin counter status error:', err);

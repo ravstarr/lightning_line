@@ -36,6 +36,7 @@ export const createTicket = createAsyncThunk(
   async (ticketData: Omit<Ticket, 'id' | 'createdAt' | 'qrCode' | 'queueNumber' | 'position'>) => {
     const response = await api.createTicket({
       trn: ticketData.trn,
+      name: ticketData.name,
       serviceType: ticketData.serviceType,
       priorityLevel: ticketData.priorityLevel,
       estimatedWait: ticketData.estimatedWait,

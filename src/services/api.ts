@@ -37,6 +37,7 @@ export const checkinCustomer = (data: {
 // ── Tickets ───────────────────────────────────────────────────────────────
 export const createTicket = (data: {
   trn?: string;
+  name?: string;
   serviceType: string;
   priorityLevel: string;
   estimatedWait: number;

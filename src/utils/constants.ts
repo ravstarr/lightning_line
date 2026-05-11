@@ -43,7 +43,7 @@ export const SERVICE_TYPES = [
 
 export const PRIORITY_LEVELS = {
   regular: { name: 'Regular', color: 'bg-gray-100 text-gray-800', icon: '' },
-  senior: { name: 'Senior (55+)', color: 'bg-green-100 text-green-800', icon: '' },
+  senior: { name: 'Senior (65+)', color: 'bg-green-100 text-green-800', icon: '' },
   disabled: { name: 'Disabled', color: 'bg-blue-100 text-blue-800', icon: '' },
   emergency: { name: 'Emergency', color: 'bg-red-100 text-red-800', icon: '' }
 };

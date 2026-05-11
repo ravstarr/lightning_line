@@ -8,6 +8,7 @@ import {
   callNextCustomer,
   completeService,
 } from '../../services/api';
+import { getSocket, disconnectSocket } from '../../services/socket';
 
 const StaffPersonalDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -46,9 +47,22 @@ const StaffPersonalDashboard: React.FC = () => {
     setStatus(parsedStaff.status || 'active');
     refreshQueue();
 
-    // Poll every 15 seconds for live updates
+    // Poll every 15 seconds as a fallback
     const interval = setInterval(refreshQueue, 15000);
-    return () => clearInterval(interval);
+
+    // Real-time updates via WebSocket
+    const socket = getSocket();
+    socket.on('queue:update', refreshQueue);
+    socket.on('ticket:called', refreshQueue);
+    socket.on('counter:status', refreshQueue);
+
+    return () => {
+      clearInterval(interval);
+      socket.off('queue:update', refreshQueue);
+      socket.off('ticket:called', refreshQueue);
+      socket.off('counter:status', refreshQueue);
+      disconnectSocket();
+    };
   }, [navigate, refreshQueue]);
 
   const handleLogout = () => {
@@ -158,6 +172,12 @@ const StaffPersonalDashboard: React.FC = () => {
                 </div>
 
                 <div className="space-y-3">
+                  {currentTicket.name && (
+                    <div className="flex justify-between border-b border-skyblue-700 pb-2">
+                      <span className="text-skyblue-300">Name:</span>
+                      <span className="text-white font-medium">{currentTicket.name}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between border-b border-skyblue-700 pb-2">
                     <span className="text-skyblue-300">Service:</span>
                     <span className="text-white capitalize">{currentTicket.serviceType}</span>

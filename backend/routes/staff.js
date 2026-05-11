@@ -3,11 +3,14 @@ const router = express.Router();
 const pool = require('../config/database');
 const { authenticateStaff } = require('../middleware/auth');
 const sms = require('../services/sms');
+const { invalidateAll, invalidateCounters } = require('../config/redis');
 
 function mapTicket(t) {
+  const nameParts = [t.first_name, t.last_name].filter(Boolean);
   return {
     id: t.ticket_id.toString(),
     trn: t.trn,
+    name: nameParts.length > 0 ? nameParts.join(' ') : null,
     serviceType: t.service_key,
     priorityLevel: t.priority_level,
     queueNumber: t.queue_number,
@@ -39,18 +42,20 @@ router.get('/queue', authenticateStaff, async (req, res) => {
     if (serviceIds.length === 0) return res.json({ tickets: [] });
 
     const result = await pool.query(
-      `SELECT qt.*, s.service_key
+      `SELECT qt.*, s.service_key, c.first_name, c.last_name
        FROM QueueTickets qt
        JOIN Services s ON qt.service_id = s.service_id
+       LEFT JOIN Customers c ON qt.TRN = c.TRN
        WHERE qt.service_id = ANY($1) AND qt.status = 'waiting'
-       ORDER BY
+       ORDER BY (
+         EXTRACT(EPOCH FROM (NOW() - qt.checkin_time)) +
          CASE qt.priority_level
-           WHEN 'emergency' THEN 1
-           WHEN 'disabled'  THEN 2
-           WHEN 'senior'    THEN 3
-           ELSE 4
-         END,
-         qt.checkin_time ASC`,
+           WHEN 'emergency' THEN 7200
+           WHEN 'disabled'  THEN 3600
+           WHEN 'senior'    THEN 1800
+           ELSE 0
+         END
+       ) DESC`,
       [serviceIds]
     );
 
@@ -67,10 +72,11 @@ router.get('/current-ticket', authenticateStaff, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT qt.*, s.service_key
+      `SELECT qt.*, s.service_key, c.first_name, c.last_name
        FROM QueueTickets qt
        JOIN Services s ON qt.service_id = s.service_id
        JOIN ServiceSessions ss ON ss.ticket_id = qt.ticket_id
+       LEFT JOIN Customers c ON qt.TRN = c.TRN
        WHERE ss.staff_id = $1 AND qt.status = 'serving' AND ss.end_time IS NULL
        LIMIT 1`,
       [staffId]
@@ -106,6 +112,7 @@ router.post('/status', authenticateStaff, async (req, res) => {
     const io = req.app.get('io');
     if (io) io.emit('counter:status', { staffId, status, reason, minutes });
 
+    invalidateCounters().catch(console.error);
     res.json({ success: true });
   } catch (err) {
     console.error('Staff status error:', err);
@@ -131,14 +138,15 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
     const nextResult = await pool.query(
       `SELECT qt.ticket_id FROM QueueTickets qt
        WHERE qt.service_id = ANY($1) AND qt.status = 'waiting'
-       ORDER BY
+       ORDER BY (
+         EXTRACT(EPOCH FROM (NOW() - qt.checkin_time)) +
          CASE qt.priority_level
-           WHEN 'emergency' THEN 1
-           WHEN 'disabled'  THEN 2
-           WHEN 'senior'    THEN 3
-           ELSE 4
-         END,
-         qt.checkin_time ASC
+           WHEN 'emergency' THEN 7200
+           WHEN 'disabled'  THEN 3600
+           WHEN 'senior'    THEN 1800
+           ELSE 0
+         END
+       ) DESC
        LIMIT 1`,
       [serviceIds]
     );
@@ -164,9 +172,10 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
     );
 
     const ticketResult = await pool.query(
-      `SELECT qt.*, s.service_key
+      `SELECT qt.*, s.service_key, c.first_name, c.last_name
        FROM QueueTickets qt
        JOIN Services s ON qt.service_id = s.service_id
+       LEFT JOIN Customers c ON qt.TRN = c.TRN
        WHERE qt.ticket_id = $1`,
       [ticketId]
     );
@@ -179,6 +188,8 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
       io.emit('ticket:called', { ticketId, counterId, queueNumber: ticket.queue_number });
       io.emit('queue:update', { type: 'ticket_called', ticketId });
     }
+
+    invalidateAll().catch(console.error);
 
     // Notify customer via SMS (non-blocking)
     sms.sendTicketCalled({
@@ -216,6 +227,7 @@ router.post('/complete', authenticateStaff, async (req, res) => {
     const io = req.app.get('io');
     if (io) io.emit('queue:update', { type: 'ticket_completed', ticketId });
 
+    invalidateAll().catch(console.error);
     res.json({ success: true });
   } catch (err) {
     console.error('Complete service error:', err);

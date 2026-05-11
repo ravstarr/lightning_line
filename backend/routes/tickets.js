@@ -3,6 +3,7 @@ const router = express.Router();
 const pool = require('../config/database');
 const http = require('http');
 const sms = require('../services/sms');
+const { invalidateStatsAndTickets } = require('../config/redis');
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000';
 
@@ -55,7 +56,7 @@ function priorityPrefix(priorityLevel) {
 
 // POST /api/tickets  — create a new queue ticket
 router.post('/', async (req, res) => {
-  const { trn, serviceType, priorityLevel, estimatedWait, phone, hasDisability } = req.body;
+  const { trn, name, serviceType, priorityLevel, estimatedWait, phone, hasDisability } = req.body;
 
   if (!serviceType) {
     return res.status(400).json({ error: 'serviceType is required.' });
@@ -74,11 +75,17 @@ router.post('/', async (req, res) => {
     const service = serviceResult.rows[0];
     // Ensure customer record exists before inserting ticket (FK requirement)
     if (trn) {
+      const parts = name ? name.trim().split(/\s+/) : [];
+      const lastName  = parts.length > 1 ? parts.pop() : null;
+      const firstName = parts.length > 0 ? parts.join(' ') : (name ? name.trim() : null);
       await pool.query(
-        `INSERT INTO Customers (TRN, phone)
-         VALUES ($1, $2)
-         ON CONFLICT (TRN) DO UPDATE SET phone = COALESCE(EXCLUDED.phone, Customers.phone)`,
-        [trn, phone || null]
+        `INSERT INTO Customers (TRN, first_name, last_name, phone)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (TRN) DO UPDATE SET
+           first_name = COALESCE(EXCLUDED.first_name, Customers.first_name),
+           last_name  = COALESCE(EXCLUDED.last_name,  Customers.last_name),
+           phone      = COALESCE(EXCLUDED.phone,      Customers.phone)`,
+        [trn, firstName, lastName, phone || null]
       );
     }
 
@@ -123,6 +130,8 @@ router.post('/', async (req, res) => {
 
     const io = req.app.get('io');
     if (io) io.emit('queue:update', { type: 'new_ticket', ticketId: ticket.ticket_id });
+
+    invalidateStatsAndTickets().catch(console.error);
 
     // Send confirmation SMS (non-blocking)
     sms.sendTicketConfirmation({

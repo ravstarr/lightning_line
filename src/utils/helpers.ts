@@ -17,7 +17,7 @@ export const validateTRN = (trn: string): boolean => {
 };
 
 export const detectPriorityFromTRN = (trn: string): 'regular' | 'senior' => {
-  // Mock detection: if TRN starts with 5-9, treat as senior (55+)
+  // Mock detection: if TRN starts with 5-9, treat as senior (65+)
   const firstDigit = parseInt(trn.charAt(0));
   return firstDigit >= 5 ? 'senior' : 'regular';
 };

@@ -33,7 +33,7 @@ const HomePage: React.FC = () => {
         }
       }
 
-      if (age >= 55 || (data.trn && data.trn.startsWith('55'))) {
+      if (age >= 65 || (data.trn && data.trn.startsWith('65'))) {
         isPriority = true;
         priorityType = 'senior';
       }

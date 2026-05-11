@@ -40,7 +40,7 @@ const LandingPage: React.FC = () => {
 
         <div className="mt-8 text-center text-skyblue-300 text-sm">
           <p>No physical tickets • Digital queue management</p>
-          <p className="mt-2">Priority service for 55+ and disabled visitors</p>
+          <p className="mt-2">Priority service for 65+ and disabled visitors</p>
         </div>
       </div>
     </div>

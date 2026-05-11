@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../../components/Logo';
 import { getAdminStats, getAdminCounters, getAdminTickets } from '../../services/api';
+import { getSocket, disconnectSocket } from '../../services/socket';
 
 const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -41,8 +42,23 @@ const AdminDashboard: React.FC = () => {
       return;
     }
     fetchData();
+
+    // Poll every 15 seconds as a fallback
     const interval = setInterval(fetchData, 15000);
-    return () => clearInterval(interval);
+
+    // Real-time updates via WebSocket
+    const socket = getSocket();
+    socket.on('queue:update', fetchData);
+    socket.on('ticket:called', fetchData);
+    socket.on('counter:status', fetchData);
+
+    return () => {
+      clearInterval(interval);
+      socket.off('queue:update', fetchData);
+      socket.off('ticket:called', fetchData);
+      socket.off('counter:status', fetchData);
+      disconnectSocket();
+    };
   }, [admin, navigate, fetchData]);
 
   const handleLogout = () => {
