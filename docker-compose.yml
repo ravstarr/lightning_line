@@ -65,6 +65,7 @@ services:
       FRONTEND_URL: http://localhost:3000
       ML_SERVICE_URL: http://ml-service:8000
       REDIS_URL: redis://redis:6379
+      CLUSTER_MODE: "true"
     depends_on:
       postgres:
         condition: service_healthy
