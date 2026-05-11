@@ -7,13 +7,14 @@ const { invalidateStatsAndTickets } = require('../config/redis');
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000';
 
-async function getMLPrediction(serviceType, priorityLevel, queueLength, activeCounters) {
+async function getMLPrediction(serviceType, priorityLevel, queueLength, activeCounters, avgHandleTime) {
   return new Promise((resolve) => {
     const body = JSON.stringify({
       service_type:    serviceType,
       priority_level:  priorityLevel,
       queue_length:    queueLength,
       active_counters: activeCounters,
+      avg_handle_time: avgHandleTime,
     });
 
     const url = new URL(`${ML_SERVICE_URL}/predict`);
@@ -114,8 +115,26 @@ router.post('/', async (req, res) => {
     );
     const activeCounters = Math.max(1, parseInt(counterResult.rows[0].count));
 
+    // Rolling 7-day average handle time for active staff on this service type
+    const handleResult = await pool.query(
+      `SELECT COALESCE(
+         AVG(EXTRACT(EPOCH FROM (ss.end_time - ss.start_time)) / 60),
+         15.0
+       ) AS avg_handle_time
+       FROM ServiceSessions ss
+       JOIN Staff st  ON ss.staff_id   = st.staff_id
+       JOIN QueueTickets qt ON ss.ticket_id = qt.ticket_id
+       JOIN Services sv ON qt.service_id = sv.service_id
+       WHERE st.status = 'active'
+         AND ss.end_time IS NOT NULL
+         AND ss.start_time >= NOW() - INTERVAL '7 days'
+         AND sv.service_key = $1`,
+      [serviceType]
+    );
+    const avgHandleTime = parseFloat(handleResult.rows[0].avg_handle_time) || 15.0;
+
     // Ask ML service for a prediction; fall back to static duration if unavailable
-    const mlWait = await getMLPrediction(serviceType, level, position - 1, activeCounters);
+    const mlWait = await getMLPrediction(serviceType, level, position - 1, activeCounters, avgHandleTime);
     const wait = mlWait || estimatedWait || service.estimated_duration;
 
     const insertResult = await pool.query(

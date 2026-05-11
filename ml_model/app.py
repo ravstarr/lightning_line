@@ -27,11 +27,12 @@ app.add_middleware(
 
 class PredictRequest(BaseModel):
     service_type:    str
-    priority_level:  str = "regular"
-    hour_of_day:     Optional[int] = None   # defaults to current hour
-    day_of_week:     Optional[int] = None   # defaults to today
-    queue_length:    int = 0
-    active_counters: int = 1
+    priority_level:  str   = "regular"
+    hour_of_day:     Optional[int]   = None   # defaults to current hour
+    day_of_week:     Optional[int]   = None   # defaults to today
+    queue_length:    int   = 0
+    active_counters: int   = 1
+    avg_handle_time: float = 15.0             # rolling avg minutes per ticket for active staff
 
 
 class PredictResponse(BaseModel):
@@ -64,21 +65,33 @@ def fetch_training_data() -> pd.DataFrame:
     try:
         query = """
             SELECT
-                s.service_key                                          AS service_type,
+                s.service_key                                           AS service_type,
                 qt.priority_level,
-                EXTRACT(HOUR FROM qt.checkin_time)::int                AS hour_of_day,
-                EXTRACT(DOW  FROM qt.checkin_time)::int                AS day_of_week,
+                EXTRACT(HOUR FROM qt.checkin_time)::int                 AS hour_of_day,
+                EXTRACT(DOW  FROM qt.checkin_time)::int                 AS day_of_week,
                 EXTRACT(EPOCH FROM (ss.start_time - qt.checkin_time)) / 60
-                                                                       AS wait_time_minutes,
+                                                                        AS wait_time_minutes,
                 (
-                    SELECT COUNT(*) FROM Staff
-                    WHERE status = 'active'
-                )::int                                                 AS active_counters,
+                    SELECT COUNT(*) FROM Staff WHERE status = 'active'
+                )::int                                                  AS active_counters,
                 (
                     SELECT COUNT(*) FROM QueueTickets q2
                     WHERE q2.status = 'waiting'
                       AND q2.checkin_time < qt.checkin_time
-                )::int                                                 AS queue_length
+                )::int                                                  AS queue_length,
+                COALESCE(
+                    (
+                        SELECT AVG(
+                            EXTRACT(EPOCH FROM (ss2.end_time - ss2.start_time)) / 60
+                        )
+                        FROM ServiceSessions ss2
+                        WHERE ss2.staff_id   = ss.staff_id
+                          AND ss2.end_time  IS NOT NULL
+                          AND ss2.start_time >= ss.start_time - INTERVAL '7 days'
+                          AND ss2.start_time  < ss.start_time
+                    ),
+                    15.0
+                )                                                       AS avg_handle_time
             FROM ServiceSessions ss
             JOIN QueueTickets qt ON ss.ticket_id = qt.ticket_id
             JOIN Services     s  ON qt.service_id = s.service_id
@@ -133,6 +146,7 @@ def predict(req: PredictRequest):
             day_of_week=dow,
             queue_length=req.queue_length,
             active_counters=req.active_counters,
+            avg_handle_time=req.avg_handle_time,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))

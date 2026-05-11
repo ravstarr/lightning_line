@@ -32,6 +32,7 @@ FEATURE_COLS = [
     "day_of_week",
     "queue_length",
     "active_counters",
+    "avg_handle_time",
 ]
 
 
@@ -54,12 +55,20 @@ def generate_synthetic_data(n: int = 1500) -> pd.DataFrame:
         "other":        20,
     }
 
+    # Staff handling speed varies per person — some clerks are faster, some slower
+    avg_handle_times = []
     wait_times = []
     for i in range(n):
         base = base_duration[service_types[i]]
 
-        # More queue → longer wait
-        queue_factor = queue_lengths[i] * (base / active_counters[i])
+        # Simulate staff speed variation (±20% around the service baseline)
+        staff_speed = float(rng.normal(1.0, 0.2))
+        avg_handle = max(5.0, round(base * staff_speed + float(rng.normal(0, 2)), 1))
+        avg_handle_times.append(avg_handle)
+
+        # More queue → longer wait; faster staff → shorter wait
+        handle_factor = avg_handle / base
+        queue_factor  = queue_lengths[i] * (avg_handle / active_counters[i])
 
         # Peak hours: 9-10am and 1-2pm and 3-4pm
         peak = 1.3 if hours[i] in (9, 13, 15) else 1.0
@@ -72,17 +81,18 @@ def generate_synthetic_data(n: int = 1500) -> pd.DataFrame:
             "emergency": 0.3,
         }[priority_levels[i]]
 
-        wait = (queue_factor * peak * priority_discount) + rng.normal(0, 2)
+        wait = (queue_factor * peak * priority_discount * handle_factor) + float(rng.normal(0, 2))
         wait = max(1, round(wait, 1))
         wait_times.append(wait)
 
     return pd.DataFrame({
-        "service_type":   service_types,
-        "priority_level": priority_levels,
-        "hour_of_day":    hours,
-        "day_of_week":    days,
-        "queue_length":   queue_lengths,
-        "active_counters": active_counters,
+        "service_type":      service_types,
+        "priority_level":    priority_levels,
+        "hour_of_day":       hours,
+        "day_of_week":       days,
+        "queue_length":      queue_lengths,
+        "active_counters":   active_counters,
+        "avg_handle_time":   avg_handle_times,
         "wait_time_minutes": wait_times,
     })
 
@@ -116,6 +126,7 @@ def predict(
     day_of_week: int,
     queue_length: int,
     active_counters: int,
+    avg_handle_time: float = 15.0,
 ) -> float:
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError("Model not trained yet. Call /train first.")
@@ -123,12 +134,13 @@ def predict(
     model = joblib.load(MODEL_PATH)
 
     row = _encode(pd.DataFrame([{
-        "service_type":   service_type,
-        "priority_level": priority_level,
-        "hour_of_day":    hour_of_day,
-        "day_of_week":    day_of_week,
-        "queue_length":   queue_length,
+        "service_type":    service_type,
+        "priority_level":  priority_level,
+        "hour_of_day":     hour_of_day,
+        "day_of_week":     day_of_week,
+        "queue_length":    queue_length,
         "active_counters": active_counters,
+        "avg_handle_time": avg_handle_time,
     }]))
 
     prediction = model.predict(row[FEATURE_COLS])[0]
