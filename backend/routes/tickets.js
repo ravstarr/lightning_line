@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 const http = require('http');
+const sms = require('../services/sms');
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000';
 
@@ -122,6 +123,15 @@ router.post('/', async (req, res) => {
 
     const io = req.app.get('io');
     if (io) io.emit('queue:update', { type: 'new_ticket', ticketId: ticket.ticket_id });
+
+    // Send confirmation SMS (non-blocking)
+    sms.sendTicketConfirmation({
+      phone:         ticket.phone,
+      queueNumber:   ticket.queue_number,
+      serviceType,
+      estimatedWait: ticket.estimated_wait,
+      priorityLevel: ticket.priority_level,
+    }).catch(console.error);
 
     res.status(201).json({
       ticket: {

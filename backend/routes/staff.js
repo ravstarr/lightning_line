@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 const { authenticateStaff } = require('../middleware/auth');
+const sms = require('../services/sms');
 
 function mapTicket(t) {
   return {
@@ -178,6 +179,13 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
       io.emit('ticket:called', { ticketId, counterId, queueNumber: ticket.queue_number });
       io.emit('queue:update', { type: 'ticket_called', ticketId });
     }
+
+    // Notify customer via SMS (non-blocking)
+    sms.sendTicketCalled({
+      phone:       ticket.phone,
+      queueNumber: ticket.queue_number,
+      counterId,
+    }).catch(console.error);
 
     res.json({ ticket: mapped });
   } catch (err) {
