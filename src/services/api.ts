@@ -24,6 +24,9 @@ export const loginAdmin = (username: string, password: string) =>
   api.post('/auth/admin/login', { username, password });
 
 // ── Customers ─────────────────────────────────────────────────────────────
+export const lookupCustomer = (trn: string) =>
+  api.get(`/customers/lookup/${trn}`);
+
 export const checkinCustomer = (data: {
   trn: string;
   firstName?: string;
