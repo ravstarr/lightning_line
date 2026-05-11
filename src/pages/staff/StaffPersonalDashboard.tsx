@@ -66,29 +66,20 @@ const StaffPersonalDashboard: React.FC = () => {
       setStatus('active');
       updateStaffStatus('active').catch(console.error);
     }
+
   };
 
   const confirmBreak = async () => {
-    try {
-      await updateStaffStatus('break', breakReason || undefined);
-      setStatus('break');
-      setCurrentTicket(null);
-    } catch (err) {
-      console.error('Error setting break:', err);
-    } finally {
-      setShowBreakModal(false);
-    }
+    setStatus('break');
+    setCurrentTicket(null);
+    setShowBreakModal(false);
+    updateStaffStatus('break', breakReason || undefined).catch(console.error);
   };
 
   const confirmDelay = async () => {
-    try {
-      await updateStaffStatus('delayed', delayReason, delayMinutes);
-      setStatus('delayed');
-    } catch (err) {
-      console.error('Error setting delay:', err);
-    } finally {
-      setShowDelayModal(false);
-    }
+    setStatus('delayed');
+    setShowDelayModal(false);
+    updateStaffStatus('delayed', delayReason, delayMinutes).catch(console.error);
   };
 
   const handleCallNext = async () => {
