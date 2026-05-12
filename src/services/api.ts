@@ -87,6 +87,22 @@ export const getAdminTickets = (params?: { serviceType?: string; status?: string
 export const updateCounterStatus = (counterId: number, status: string) =>
   api.post(`/admin/counters/${counterId}/status`, { status });
 
+export const createStaff = (data: {
+  firstName: string;
+  lastName: string;
+  username: string;
+  password: string;
+  counterId: number;
+  serviceTypes: string[];
+  role?: string;
+}) => api.post('/admin/staff', data);
+
+export const updateStaffServices = (staffId: number, serviceTypes: string[]) =>
+  api.put(`/admin/staff/${staffId}/services`, { serviceTypes });
+
+export const removeStaff = (staffId: number) =>
+  api.delete(`/admin/staff/${staffId}`);
+
 // ── Queue ─────────────────────────────────────────────────────────────────
 export const getQueueMetrics = () => api.get('/queue/metrics');
 export const getQueueEstimates = () => api.get('/queue/estimates');

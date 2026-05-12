@@ -1,8 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../../components/Logo';
-import { getAdminStats, getAdminCounters, getAdminTickets } from '../../services/api';
+import {
+  getAdminStats,
+  getAdminCounters,
+  getAdminTickets,
+  createStaff,
+  updateStaffServices,
+  removeStaff,
+} from '../../services/api';
 import { getSocket, disconnectSocket } from '../../services/socket';
+
+const ALL_SERVICES = ['payments', 'documents', 'inquiries', 'registration', 'other'];
 
 const AdminDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -20,6 +29,21 @@ const AdminDashboard: React.FC = () => {
   const [stats, setStats] = useState({ waiting: 0, serving: 0, completed: 0, priority: 0 });
   const [selectedStaff, setSelectedStaff] = useState<any>(null);
   const [showStaffModal, setShowStaffModal] = useState(false);
+
+  // Add staff modal
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({
+    firstName: '', lastName: '', username: '', password: '',
+    counterId: '', serviceTypes: [] as string[], role: 'clerk',
+  });
+  const [addError, setAddError] = useState('');
+  const [addLoading, setAddLoading] = useState(false);
+
+  // Edit services modal
+  const [showServicesModal, setShowServicesModal] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<any>(null);
+  const [editServices, setEditServices] = useState<string[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -65,6 +89,72 @@ const AdminDashboard: React.FC = () => {
     localStorage.removeItem('adminAuthToken');
     localStorage.removeItem('currentAdmin');
     navigate('/admin/login');
+  };
+
+  const handleAddStaff = async () => {
+    setAddError('');
+    if (!addForm.firstName || !addForm.lastName || !addForm.username || !addForm.password || !addForm.counterId) {
+      setAddError('All fields are required.');
+      return;
+    }
+    setAddLoading(true);
+    try {
+      await createStaff({
+        firstName: addForm.firstName,
+        lastName: addForm.lastName,
+        username: addForm.username,
+        password: addForm.password,
+        counterId: parseInt(addForm.counterId),
+        serviceTypes: addForm.serviceTypes,
+        role: addForm.role,
+      });
+      setShowAddModal(false);
+      setAddForm({ firstName: '', lastName: '', username: '', password: '', counterId: '', serviceTypes: [], role: 'clerk' });
+      fetchData();
+    } catch (err: any) {
+      setAddError(err.response?.data?.error || 'Failed to create staff member.');
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  const handleUpdateServices = async () => {
+    if (!editingStaff) return;
+    setServicesLoading(true);
+    try {
+      await updateStaffServices(editingStaff.staffId, editServices);
+      setShowServicesModal(false);
+      fetchData();
+    } catch (err) {
+      console.error('Update services error:', err);
+    } finally {
+      setServicesLoading(false);
+    }
+  };
+
+  const handleRemoveStaff = async (counter: any) => {
+    if (!window.confirm(`Remove ${counter.staffName} from Counter ${counter.id}? This cannot be undone.`)) return;
+    try {
+      await removeStaff(counter.staffId);
+      fetchData();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to remove staff member.');
+    }
+  };
+
+  const toggleAddService = (service: string) => {
+    setAddForm((prev) => ({
+      ...prev,
+      serviceTypes: prev.serviceTypes.includes(service)
+        ? prev.serviceTypes.filter((s) => s !== service)
+        : [...prev.serviceTypes, service],
+    }));
+  };
+
+  const toggleEditService = (service: string) => {
+    setEditServices((prev) =>
+      prev.includes(service) ? prev.filter((s) => s !== service) : [...prev, service]
+    );
   };
 
   if (!admin) {
@@ -213,6 +303,12 @@ const AdminDashboard: React.FC = () => {
               <div>
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="text-xl font-semibold text-white">Staff & Counters</h3>
+                  <button
+                    onClick={() => { setAddError(''); setShowAddModal(true); }}
+                    className="px-4 py-2 bg-aqua-700 hover:bg-aqua-600 text-white rounded-lg text-sm font-medium transition"
+                  >
+                    + Add Staff
+                  </button>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full">
@@ -240,13 +336,6 @@ const AdminDashboard: React.FC = () => {
                             }`}>
                               {counter.status}
                             </span>
-                            {counter.delay?.reason && (
-                              <p className="text-xs text-yellow-300 mt-1 italic">
-                                {counter.status === 'delayed'
-                                  ? `${counter.delay.reason}${counter.delay.estimatedMinutes ? ` (~${counter.delay.estimatedMinutes} min)` : ''}`
-                                  : counter.delay.reason}
-                              </p>
-                            )}
                           </td>
                           <td className="px-4 py-3 text-white">{counter.currentTicket || '-'}</td>
                           <td className="px-4 py-3 text-skyblue-300 text-sm">
@@ -254,15 +343,40 @@ const AdminDashboard: React.FC = () => {
                             {(counter.serviceTypes || []).length > 2 && '...'}
                           </td>
                           <td className="px-4 py-3">
-                            <button
-                              onClick={() => { setSelectedStaff(counter); setShowStaffModal(true); }}
-                              className="text-aqua-400 hover:text-aqua-300 text-sm"
-                            >
-                              View Details
-                            </button>
+                            <div className="flex items-center space-x-3">
+                              <button
+                                onClick={() => { setSelectedStaff(counter); setShowStaffModal(true); }}
+                                className="text-aqua-400 hover:text-aqua-300 text-sm"
+                              >
+                                Details
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingStaff(counter);
+                                  setEditServices(counter.serviceTypes || []);
+                                  setShowServicesModal(true);
+                                }}
+                                className="text-skyblue-400 hover:text-skyblue-300 text-sm"
+                              >
+                                Edit Services
+                              </button>
+                              <button
+                                onClick={() => handleRemoveStaff(counter)}
+                                className="text-red-400 hover:text-red-300 text-sm"
+                              >
+                                Remove
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
+                      {counters.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="px-4 py-8 text-center text-skyblue-400">
+                            No staff assigned. Click "+ Add Staff" to get started.
+                          </td>
+                        </tr>
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -332,6 +446,142 @@ const AdminDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Add Staff Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 bg-darkblue-800 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-darkblue-900 rounded-lg p-6 max-w-lg w-full border border-skyblue-700">
+            <h3 className="text-xl font-bold text-white mb-4">Add Staff Member</h3>
+
+            {addError && (
+              <div className="mb-4 p-3 bg-red-900 border border-red-700 rounded text-red-200 text-sm">
+                {addError}
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              {[
+                { label: 'First Name', key: 'firstName' },
+                { label: 'Last Name',  key: 'lastName'  },
+                { label: 'Username',   key: 'username'  },
+                { label: 'Password',   key: 'password'  },
+              ].map(({ label, key }) => (
+                <div key={key}>
+                  <label className="block text-sm font-medium text-skyblue-200 mb-1">{label}</label>
+                  <input
+                    type={key === 'password' ? 'password' : 'text'}
+                    value={(addForm as any)[key]}
+                    onChange={(e) => setAddForm((prev) => ({ ...prev, [key]: e.target.value }))}
+                    className="w-full px-3 py-2 border border-skyblue-600 rounded-lg bg-darkblue-700 text-white text-sm"
+                  />
+                </div>
+              ))}
+
+              <div>
+                <label className="block text-sm font-medium text-skyblue-200 mb-1">Counter ID</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={addForm.counterId}
+                  onChange={(e) => setAddForm((prev) => ({ ...prev, counterId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-skyblue-600 rounded-lg bg-darkblue-700 text-white text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-skyblue-200 mb-1">Role</label>
+                <select
+                  value={addForm.role}
+                  onChange={(e) => setAddForm((prev) => ({ ...prev, role: e.target.value }))}
+                  className="w-full px-3 py-2 border border-skyblue-600 rounded-lg bg-darkblue-700 text-white text-sm"
+                >
+                  <option value="clerk">Clerk</option>
+                  <option value="supervisor">Supervisor</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-skyblue-200 mb-2">Services Handled</label>
+              <div className="flex flex-wrap gap-2">
+                {ALL_SERVICES.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => toggleAddService(s)}
+                    className={`px-3 py-1 rounded text-sm font-medium transition capitalize ${
+                      addForm.serviceTypes.includes(s)
+                        ? 'bg-aqua-700 text-white'
+                        : 'bg-darkblue-700 text-skyblue-300 border border-skyblue-600'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="flex-1 py-2 border border-skyblue-600 text-skyblue-200 rounded-lg hover:bg-darkblue-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddStaff}
+                disabled={addLoading}
+                className="flex-1 py-2 bg-aqua-700 hover:bg-aqua-600 text-white rounded-lg transition disabled:opacity-50"
+              >
+                {addLoading ? 'Creating...' : 'Create Staff'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Services Modal */}
+      {showServicesModal && editingStaff && (
+        <div className="fixed inset-0 bg-darkblue-800 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-darkblue-900 rounded-lg p-6 max-w-md w-full border border-skyblue-700">
+            <h3 className="text-xl font-bold text-white mb-1">Edit Services</h3>
+            <p className="text-skyblue-300 text-sm mb-6">
+              Counter {editingStaff.id} — {editingStaff.staffName}
+            </p>
+
+            <div className="flex flex-wrap gap-3 mb-6">
+              {ALL_SERVICES.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => toggleEditService(s)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition capitalize ${
+                    editServices.includes(s)
+                      ? 'bg-aqua-700 text-white'
+                      : 'bg-darkblue-700 text-skyblue-300 border border-skyblue-600'
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowServicesModal(false)}
+                className="flex-1 py-2 border border-skyblue-600 text-skyblue-200 rounded-lg hover:bg-darkblue-700 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateServices}
+                disabled={servicesLoading}
+                className="flex-1 py-2 bg-skyblue-800 hover:bg-skyblue-700 text-white rounded-lg transition disabled:opacity-50"
+              >
+                {servicesLoading ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Staff Details Modal */}
       {showStaffModal && selectedStaff && (

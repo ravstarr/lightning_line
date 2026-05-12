@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const bcrypt = require('bcryptjs');
 const pool = require('../config/database');
 const { authenticateAdmin } = require('../middleware/auth');
-const { KEYS, cacheGet, cacheSet, invalidateCounters } = require('../config/redis');
+const { KEYS, cacheGet, cacheSet, invalidateCounters, invalidateAll } = require('../config/redis');
+
+const ALL_SERVICES = ['payments', 'documents', 'inquiries', 'registration', 'other'];
 
 // GET /api/admin/stats
 router.get('/stats', authenticateAdmin, async (req, res) => {
@@ -158,6 +161,105 @@ router.post('/counters/:id/status', authenticateAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('Admin counter status error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// POST /api/admin/staff — create a new staff member and assign them a counter
+router.post('/staff', authenticateAdmin, async (req, res) => {
+  const { firstName, lastName, username, password, counterId, serviceTypes, role } = req.body;
+
+  if (!firstName || !lastName || !username || !password || !counterId) {
+    return res.status(400).json({ error: 'firstName, lastName, username, password, and counterId are required.' });
+  }
+
+  const services = (serviceTypes || []).filter((s) => ALL_SERVICES.includes(s));
+
+  try {
+    const existing = await pool.query('SELECT staff_id FROM Staff WHERE username = $1', [username]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'Username already taken.' });
+    }
+
+    const counterTaken = await pool.query('SELECT staff_id FROM Staff WHERE counter_id = $1', [counterId]);
+    if (counterTaken.rows.length > 0) {
+      return res.status(409).json({ error: `Counter ${counterId} is already assigned to another staff member.` });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const result = await pool.query(
+      `INSERT INTO Staff (first_name, last_name, username, password_hash, counter_id, service_types, role, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')
+       RETURNING staff_id, first_name, last_name, username, counter_id, service_types, role, status`,
+      [firstName, lastName, username, hash, counterId, services, role || 'clerk']
+    );
+
+    await invalidateAll();
+    res.status(201).json({ staff: result.rows[0] });
+  } catch (err) {
+    console.error('Create staff error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// PUT /api/admin/staff/:staffId/services — update which services a counter handles
+router.put('/staff/:staffId/services', authenticateAdmin, async (req, res) => {
+  const staffId = parseInt(req.params.staffId, 10);
+  const { serviceTypes } = req.body;
+
+  if (!Array.isArray(serviceTypes)) {
+    return res.status(400).json({ error: 'serviceTypes must be an array.' });
+  }
+
+  const services = serviceTypes.filter((s) => ALL_SERVICES.includes(s));
+
+  try {
+    const result = await pool.query(
+      'UPDATE Staff SET service_types = $1 WHERE staff_id = $2 RETURNING staff_id',
+      [services, staffId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Staff member not found.' });
+    }
+
+    await invalidateCounters();
+    res.json({ success: true, serviceTypes: services });
+  } catch (err) {
+    console.error('Update services error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// DELETE /api/admin/staff/:staffId — remove a staff member
+router.delete('/staff/:staffId', authenticateAdmin, async (req, res) => {
+  const staffId = parseInt(req.params.staffId, 10);
+
+  try {
+    // Don't delete if they currently have an active ticket
+    const active = await pool.query(
+      `SELECT qt.ticket_id FROM QueueTickets qt
+       JOIN ServiceSessions ss ON ss.ticket_id = qt.ticket_id
+       WHERE ss.staff_id = $1 AND qt.status IN ('called', 'serving') AND ss.end_time IS NULL`,
+      [staffId]
+    );
+    if (active.rows.length > 0) {
+      return res.status(409).json({ error: 'Cannot remove staff while they have an active ticket.' });
+    }
+
+    const result = await pool.query(
+      'DELETE FROM Staff WHERE staff_id = $1 RETURNING staff_id',
+      [staffId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Staff member not found.' });
+    }
+
+    await invalidateAll();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete staff error:', err);
     res.status(500).json({ error: 'Server error.' });
   }
 });
