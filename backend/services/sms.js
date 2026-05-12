@@ -50,13 +50,35 @@ async function sendTicketConfirmation({ phone, queueNumber, serviceType, estimat
   );
 }
 
-// Sent when staff calls the customer's ticket
+// Sent when staff calls the customer's ticket; a 2-minute hold countdown begins
 async function sendTicketCalled({ phone, queueNumber, counterId }) {
   if (!phone) return;
   await send(phone,
     `Lightning Line\n` +
-    `Your number ${queueNumber} is being called!\n` +
-    `Please proceed to Counter ${counterId}.`
+    `Your number ${queueNumber} is up!\n` +
+    `Please proceed to Counter ${counterId}.\n` +
+    `We'll hold your spot for 2 minutes.`
+  );
+}
+
+// Sent when customer misses their first call — ticket recycled 3 spots back
+async function sendNoShowRecovery({ phone, queueNumber }) {
+  if (!phone) return;
+  await send(phone,
+    `Lightning Line\n` +
+    `We called number ${queueNumber} but missed you.\n` +
+    `Your spot has been moved back 3 positions in the queue.\n` +
+    `Please stay nearby — you'll be called again soon.`
+  );
+}
+
+// Sent on the second miss — ticket cancelled
+async function sendFinalCancellation({ phone, queueNumber }) {
+  if (!phone) return;
+  await send(phone,
+    `Lightning Line\n` +
+    `Ticket ${queueNumber} has been cancelled after 2 missed calls.\n` +
+    `Please speak to a staff member to re-join the queue.`
   );
 }
 
@@ -74,4 +96,10 @@ async function sendDelayNotification({ phone, queueNumber, delayMinutes, reason,
   );
 }
 
-module.exports = { sendTicketConfirmation, sendTicketCalled, sendDelayNotification };
+module.exports = {
+  sendTicketConfirmation,
+  sendTicketCalled,
+  sendDelayNotification,
+  sendNoShowRecovery,
+  sendFinalCancellation,
+};

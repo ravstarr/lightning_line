@@ -51,7 +51,7 @@ async function startServer() {
   app.use(cors({ origin: FRONTEND_URL }));
   app.use(express.json());
 
-  const { router: staffRouter, restoreDelayTimers } = require('./routes/staff');
+  const { router: staffRouter, restoreDelayTimers, restoreCalledTimers } = require('./routes/staff');
 
   app.use('/api/auth',      require('./routes/auth'));
   app.use('/api/customers', require('./routes/customers'));
@@ -78,7 +78,7 @@ async function startServer() {
   server.listen(PORT, () => {
     const label = CLUSTER_MODE ? `Worker ${process.pid}` : 'Server';
     console.log(`[${label}] Lightning Line backend running on port ${PORT}`);
-    // Re-arm any delay timers that were active before this restart
     restoreDelayTimers().catch(console.error);
+    restoreCalledTimers(io).catch(console.error);
   });
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Logo from '../../components/Logo';
 import {
@@ -7,8 +7,18 @@ import {
   updateStaffStatus,
   callNextCustomer,
   completeService,
+  customerArrived,
+  markNoShow,
 } from '../../services/api';
 import { getSocket, disconnectSocket } from '../../services/socket';
+
+const HOLD_SECONDS = 120;
+
+function formatCountdown(secs: number): string {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
 
 const StaffPersonalDashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -22,6 +32,31 @@ const StaffPersonalDashboard: React.FC = () => {
   const [currentTicket, setCurrentTicket] = useState<any>(null);
   const [myQueue, setMyQueue] = useState<any[]>([]);
   const [loadingNext, setLoadingNext] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const clearCountdown = () => {
+    if (countdownRef.current !== null) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+    setCountdown(null);
+  };
+
+  // Start or restart the countdown whenever we have a 'called' ticket with calledAt
+  const startCountdownFor = useCallback((calledAt: string | Date) => {
+    clearCountdown();
+    const calc = () => {
+      const elapsed = Date.now() - new Date(calledAt).getTime();
+      return Math.max(0, Math.round((HOLD_SECONDS * 1000 - elapsed) / 1000));
+    };
+    setCountdown(calc());
+    countdownRef.current = setInterval(() => {
+      const rem = calc();
+      setCountdown(rem);
+      if (rem <= 0) clearCountdown();
+    }, 1000);
+  }, []);
 
   const refreshQueue = useCallback(async () => {
     try {
@@ -29,12 +64,20 @@ const StaffPersonalDashboard: React.FC = () => {
         getStaffQueue(),
         getCurrentTicket(),
       ]);
+      const ticket = ticketRes.data.ticket || null;
       setMyQueue(queueRes.data.tickets || []);
-      setCurrentTicket(ticketRes.data.ticket || null);
+      setCurrentTicket(ticket);
+
+      // Re-sync countdown whenever we get a called ticket (e.g. after socket update / reload)
+      if (ticket?.status === 'called' && ticket.calledAt) {
+        startCountdownFor(ticket.calledAt);
+      } else if (!ticket || ticket.status !== 'called') {
+        clearCountdown();
+      }
     } catch (err) {
       console.error('Error refreshing queue:', err);
     }
-  }, []);
+  }, [startCountdownFor]);
 
   useEffect(() => {
     const staffData = sessionStorage.getItem('currentStaff');
@@ -47,20 +90,22 @@ const StaffPersonalDashboard: React.FC = () => {
     setStatus(parsedStaff.status || 'active');
     refreshQueue();
 
-    // Poll every 15 seconds as a fallback
     const interval = setInterval(refreshQueue, 15000);
 
-    // Real-time updates via WebSocket
     const socket = getSocket();
     socket.on('queue:update', refreshQueue);
     socket.on('ticket:called', refreshQueue);
     socket.on('counter:status', refreshQueue);
+    // Auto-fired no-show: server recycled/cancelled the on-deck ticket
+    socket.on('no_show:triggered', refreshQueue);
 
     return () => {
       clearInterval(interval);
+      clearCountdown();
       socket.off('queue:update', refreshQueue);
       socket.off('ticket:called', refreshQueue);
       socket.off('counter:status', refreshQueue);
+      socket.off('no_show:triggered', refreshQueue);
       disconnectSocket();
     };
   }, [navigate, refreshQueue]);
@@ -80,7 +125,6 @@ const StaffPersonalDashboard: React.FC = () => {
       setStatus('active');
       updateStaffStatus('active').catch(console.error);
     }
-
   };
 
   const confirmBreak = async () => {
@@ -102,13 +146,38 @@ const StaffPersonalDashboard: React.FC = () => {
     try {
       const res = await callNextCustomer();
       if (res.data.ticket) {
-        setCurrentTicket(res.data.ticket);
-        setMyQueue((prev) => prev.filter((t) => t.id !== res.data.ticket.id));
+        const ticket = res.data.ticket;
+        setCurrentTicket(ticket);
+        setMyQueue((prev) => prev.filter((t) => t.id !== ticket.id));
+        if (ticket.calledAt) startCountdownFor(ticket.calledAt);
       }
     } catch (err) {
       console.error('Error calling next:', err);
     } finally {
       setLoadingNext(false);
+    }
+  };
+
+  const handleCustomerArrived = async () => {
+    if (!currentTicket) return;
+    try {
+      const res = await customerArrived(currentTicket.id);
+      clearCountdown();
+      setCurrentTicket(res.data.ticket);
+    } catch (err) {
+      console.error('Error confirming arrival:', err);
+    }
+  };
+
+  const handleNoShow = async () => {
+    if (!currentTicket) return;
+    try {
+      await markNoShow(currentTicket.id);
+      clearCountdown();
+      setCurrentTicket(null);
+      await refreshQueue();
+    } catch (err) {
+      console.error('Error marking no-show:', err);
     }
   };
 
@@ -124,6 +193,11 @@ const StaffPersonalDashboard: React.FC = () => {
   };
 
   if (!staff) return null;
+
+  const isOnDeck = currentTicket?.status === 'called';
+  const isServing = currentTicket?.status === 'serving';
+
+  const countdownUrgent = countdown !== null && countdown <= 30;
 
   return (
     <div className="min-h-screen bg-darkblue-900 p-6">
@@ -158,11 +232,79 @@ const StaffPersonalDashboard: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Current Customer */}
+          {/* Current / On-Deck Customer Panel */}
           <div className="bg-darkblue-800 rounded-lg shadow p-6 border border-skyblue-700">
-            <h2 className="text-xl font-semibold mb-4 text-white">Current Customer</h2>
+            <h2 className="text-xl font-semibold mb-4 text-white">
+              {isOnDeck ? 'On-Deck — Awaiting Arrival' : 'Current Customer'}
+            </h2>
 
-            {currentTicket ? (
+            {/* ── ON-DECK: countdown + two-button confirmation ── */}
+            {isOnDeck && (
+              <div className="space-y-4">
+                <div className={`rounded-lg p-6 text-center border-2 ${
+                  countdownUrgent
+                    ? 'bg-red-900 border-red-500'
+                    : 'bg-skyblue-900 border-blue-700'
+                }`}>
+                  <div className={`text-6xl font-mono font-bold mb-1 ${
+                    countdownUrgent ? 'text-red-300' : 'text-aqua-400'
+                  }`}>
+                    {countdown !== null ? formatCountdown(countdown) : '2:00'}
+                  </div>
+                  <div className="text-sm text-skyblue-300">hold time remaining</div>
+                  <div className="mt-3 text-3xl font-bold text-white">
+                    {currentTicket.queueNumber}
+                  </div>
+                  <div className="text-xs text-skyblue-400 mt-1">
+                    {currentTicket.noShowCount > 0 && (
+                      <span className="bg-yellow-800 text-yellow-200 px-2 py-0.5 rounded text-xs mr-2">
+                        1 strike
+                      </span>
+                    )}
+                    SMS sent · Counter {currentTicket.counterAssigned}
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  {currentTicket.name && (
+                    <div className="flex justify-between border-b border-skyblue-700 pb-2">
+                      <span className="text-skyblue-300">Name:</span>
+                      <span className="text-white font-medium">{currentTicket.name}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-b border-skyblue-700 pb-2">
+                    <span className="text-skyblue-300">Service:</span>
+                    <span className="text-white capitalize">{currentTicket.serviceType}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-skyblue-700 pb-2">
+                    <span className="text-skyblue-300">Priority:</span>
+                    <span className={`capitalize font-medium ${
+                      currentTicket.priorityLevel !== 'regular' ? 'text-green-400' : 'text-white'
+                    }`}>
+                      {currentTicket.priorityLevel}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-2">
+                  <button
+                    onClick={handleCustomerArrived}
+                    className="py-3 bg-green-800 hover:bg-green-700 text-white rounded-lg font-medium transition"
+                  >
+                    Customer Arrived
+                  </button>
+                  <button
+                    onClick={handleNoShow}
+                    className="py-3 bg-red-900 hover:bg-red-800 text-white rounded-lg font-medium transition border border-red-700"
+                  >
+                    Not Present
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── SERVING: existing customer detail view ── */}
+            {isServing && (
               <div className="space-y-4">
                 <div className="bg-skyblue-900 border border-blue-700 rounded-lg p-6 text-center">
                   <div className="text-5xl font-bold text-aqua-400 mb-2">
@@ -213,7 +355,10 @@ const StaffPersonalDashboard: React.FC = () => {
                   Complete Service
                 </button>
               </div>
-            ) : (
+            )}
+
+            {/* ── IDLE: call next button ── */}
+            {!currentTicket && (
               <div className="text-center py-12">
                 <div className="text-skyblue-400 mb-4">
                   <svg className="w-16 h-16 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -284,7 +429,12 @@ const StaffPersonalDashboard: React.FC = () => {
                             <p className="text-sm text-skyblue-300 capitalize">{ticket.serviceType}</p>
                           </div>
                         </div>
-                        <div className="text-right">
+                        <div className="flex items-center space-x-2">
+                          {ticket.noShowCount > 0 && (
+                            <span className="text-xs bg-yellow-900 text-yellow-300 px-2 py-0.5 rounded">
+                              1 strike
+                            </span>
+                          )}
                           {(ticket.priorityLevel === 'senior' || ticket.priorityLevel === 'disabled') && (
                             <span className="text-xs bg-green-800 text-green-200 px-2 py-1 rounded">
                               Priority

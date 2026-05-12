@@ -70,6 +70,12 @@ export const callNextCustomer = () => api.post('/staff/call-next');
 export const completeService = (ticketId: string) =>
   api.post('/staff/complete', { ticketId });
 
+export const customerArrived = (ticketId: string) =>
+  api.post('/staff/customer-arrived', { ticketId });
+
+export const markNoShow = (ticketId: string) =>
+  api.post('/staff/no-show', { ticketId });
+
 // ── Admin ─────────────────────────────────────────────────────────────────
 export const getAdminStats = () => api.get('/admin/stats');
 

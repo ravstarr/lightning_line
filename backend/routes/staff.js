@@ -5,8 +5,8 @@ const { authenticateStaff } = require('../middleware/auth');
 const sms = require('../services/sms');
 const { invalidateAll, invalidateCounters } = require('../config/redis');
 
-// In-memory delay timers — keyed by staffId
-// Each entry sends recurring SMS updates every 10 min until delay clears or customer served
+// ── Delay timers ──────────────────────────────────────────────────────────────
+// Keyed by staffId; each entry sends recurring SMS every 10 min while delayed.
 const delayTimers = new Map();
 
 function clearDelayTimer(staffId) {
@@ -34,7 +34,6 @@ async function sendDelayUpdates(staffId, delayMinutes, reason) {
     );
 
     if (result.rows.length === 0) {
-      // No one left waiting — stop sending updates
       clearDelayTimer(staffId);
       return;
     }
@@ -57,6 +56,98 @@ async function sendDelayUpdates(staffId, delayMinutes, reason) {
   }
 }
 
+// ── Called timers ─────────────────────────────────────────────────────────────
+// Keyed by ticketId (number); 120-second countdown after staff calls a customer.
+// Auto-triggers no-show logic if customer doesn't arrive.
+const calledTimers = new Map();
+const CALLED_TIMEOUT_MS = 120 * 1000;
+
+function clearCalledTimer(ticketId) {
+  if (calledTimers.has(ticketId)) {
+    clearTimeout(calledTimers.get(ticketId).timeoutId);
+    calledTimers.delete(ticketId);
+  }
+}
+
+// Core no-show handler — called by both the auto-timer and the manual endpoint.
+async function triggerNoShow(ticketId, io) {
+  try {
+    calledTimers.delete(ticketId);
+
+    const ticketResult = await pool.query(
+      `SELECT ticket_id, phone, queue_number, no_show_count, service_id
+       FROM QueueTickets
+       WHERE ticket_id = $1 AND status = 'called'`,
+      [ticketId]
+    );
+
+    if (ticketResult.rows.length === 0) return; // Already resolved (arrived or cancelled)
+
+    const ticket = ticketResult.rows[0];
+
+    if (ticket.no_show_count >= 1) {
+      // Second miss — cancel the ticket
+      await pool.query(
+        `UPDATE QueueTickets
+         SET status = 'cancelled', cancelled_at = NOW()
+         WHERE ticket_id = $1`,
+        [ticketId]
+      );
+      sms.sendFinalCancellation({
+        phone: ticket.phone,
+        queueNumber: ticket.queue_number,
+      }).catch(console.error);
+      if (io) io.emit('queue:update', { type: 'ticket_cancelled', ticketId });
+    } else {
+      // First miss — recycle 3 spots back and increment strike.
+      // The new checkin_time is computed entirely in SQL to avoid JS timezone issues.
+      // We find the 3rd ticket's checkin_time and set ours 1 second later (more recent
+      // = lower effective_wait = behind them in the DESC sort). Falls back to NOW()
+      // when fewer than 3 tickets are waiting.
+      await pool.query(
+        `UPDATE QueueTickets
+         SET status           = 'waiting',
+             checkin_time     = (
+               SELECT COALESCE(
+                 (SELECT checkin_time + INTERVAL '1 second'
+                  FROM QueueTickets
+                  WHERE service_id = $2 AND status = 'waiting'
+                  ORDER BY (
+                    EXTRACT(EPOCH FROM (NOW() - checkin_time)) +
+                    CASE priority_level
+                      WHEN 'emergency' THEN 7200
+                      WHEN 'disabled'  THEN 3600
+                      WHEN 'senior'    THEN 1800
+                      ELSE 0
+                    END
+                  ) DESC
+                  LIMIT 1 OFFSET 2),
+                 NOW()
+               )
+             ),
+             counter_assigned = NULL,
+             called_at        = NULL,
+             no_show_count    = no_show_count + 1,
+             no_show_at       = NOW()
+         WHERE ticket_id = $1`,
+        [ticketId, ticket.service_id]
+      );
+      sms.sendNoShowRecovery({
+        phone: ticket.phone,
+        queueNumber: ticket.queue_number,
+      }).catch(console.error);
+      if (io) io.emit('queue:update', { type: 'ticket_recycled', ticketId });
+    }
+
+    if (io) io.emit('no_show:triggered', { ticketId });
+    await invalidateAll();
+  } catch (err) {
+    console.error(`[No-show timer] Error for ticket ${ticketId}:`, err);
+  }
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
 function mapTicket(t) {
   const nameParts = [t.first_name, t.last_name].filter(Boolean);
   return {
@@ -70,11 +161,15 @@ function mapTicket(t) {
     position: t.position,
     status: t.status,
     createdAt: t.checkin_time,
+    calledAt: t.called_at || null,
+    noShowCount: t.no_show_count || 0,
     phone: t.phone,
     hasDisability: t.has_disability,
     counterAssigned: t.counter_assigned || null,
   };
 }
+
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 // GET /api/staff/queue  — tickets waiting for this staff's service types
 router.get('/queue', authenticateStaff, async (req, res) => {
@@ -118,11 +213,30 @@ router.get('/queue', authenticateStaff, async (req, res) => {
   }
 });
 
-// GET /api/staff/current-ticket  — ticket currently being served by this staff member
+// GET /api/staff/current-ticket
+// Returns the active ticket for this staff member: 'called' (on-deck) takes
+// priority over 'serving' so the frontend can show the correct panel.
 router.get('/current-ticket', authenticateStaff, async (req, res) => {
-  const { id: staffId } = req.staff;
+  const { id: staffId, counterId } = req.staff;
 
   try {
+    // On-deck: called but not yet arrived — keyed by counter assignment
+    if (counterId) {
+      const calledResult = await pool.query(
+        `SELECT qt.*, s.service_key, c.first_name, c.last_name
+         FROM QueueTickets qt
+         JOIN Services s ON qt.service_id = s.service_id
+         LEFT JOIN Customers c ON qt.TRN = c.TRN
+         WHERE qt.status = 'called' AND qt.counter_assigned = $1
+         LIMIT 1`,
+        [counterId]
+      );
+      if (calledResult.rows.length > 0) {
+        return res.json({ ticket: mapTicket(calledResult.rows[0]) });
+      }
+    }
+
+    // Actively serving
     const result = await pool.query(
       `SELECT qt.*, s.service_key, c.first_name, c.last_name
        FROM QueueTickets qt
@@ -135,7 +249,6 @@ router.get('/current-ticket', authenticateStaff, async (req, res) => {
     );
 
     if (result.rows.length === 0) return res.json({ ticket: null });
-
     res.json({ ticket: mapTicket(result.rows[0]) });
   } catch (err) {
     console.error('Current ticket error:', err);
@@ -167,10 +280,8 @@ router.post('/status', authenticateStaff, async (req, res) => {
 
     invalidateCounters().catch(console.error);
 
-    // Manage recurring delay SMS timer
     clearDelayTimer(staffId);
     if (status === 'delayed' && minutes) {
-      // Send immediately, then repeat every 10 minutes until delay clears or customer is served
       sendDelayUpdates(staffId, minutes, reason);
       const timer = setInterval(() => sendDelayUpdates(staffId, minutes, reason), 10 * 60 * 1000);
       delayTimers.set(staffId, timer);
@@ -183,7 +294,10 @@ router.post('/status', authenticateStaff, async (req, res) => {
   }
 });
 
-// POST /api/staff/call-next  — pull the next ticket from the queue
+// POST /api/staff/call-next
+// Pulls the top-priority waiting ticket, moves it to 'called', and starts the
+// 120-second on-deck countdown. The ticket only becomes 'serving' once the
+// staff confirms the customer arrived via /customer-arrived.
 router.post('/call-next', authenticateStaff, async (req, res) => {
   const { id: staffId, counterId, serviceTypes } = req.staff;
 
@@ -198,8 +312,6 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
     );
     const serviceIds = servicesResult.rows.map((s) => s.service_id);
 
-    // Wrap in a transaction with SELECT FOR UPDATE SKIP LOCKED so two counters
-    // calling simultaneously each get a different ticket — no double-assignment.
     const client = await pool.connect();
     let ticketId;
     try {
@@ -229,18 +341,12 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
 
       ticketId = nextResult.rows[0].ticket_id;
 
-      // Mark as serving and assign counter
+      // Transition to 'called' — service session created only after customer arrives
       await client.query(
         `UPDATE QueueTickets
-         SET status = 'serving', counter_assigned = $1, called_at = NOW()
+         SET status = 'called', counter_assigned = $1, called_at = NOW()
          WHERE ticket_id = $2`,
         [counterId, ticketId]
-      );
-
-      // Open a service session
-      await client.query(
-        'INSERT INTO ServiceSessions (ticket_id, staff_id) VALUES ($1, $2)',
-        [ticketId, staffId]
       );
 
       await client.query('COMMIT');
@@ -271,7 +377,10 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
       io.emit('queue:update', { type: 'ticket_called', ticketId });
     }
 
-    // Notify customer via SMS (non-blocking)
+    // Start 120-second no-show countdown
+    const timeoutId = setTimeout(() => triggerNoShow(ticketId, io), CALLED_TIMEOUT_MS);
+    calledTimers.set(ticketId, { timeoutId });
+
     sms.sendTicketCalled({
       phone:       ticket.phone,
       queueNumber: ticket.queue_number,
@@ -281,6 +390,77 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
     res.json({ ticket: mapped });
   } catch (err) {
     console.error('Call next error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// POST /api/staff/customer-arrived
+// Staff confirms the on-deck customer showed up. Clears the countdown timer and
+// transitions the ticket from 'called' → 'serving', opening the service session.
+router.post('/customer-arrived', authenticateStaff, async (req, res) => {
+  const { id: staffId } = req.staff;
+  const { ticketId } = req.body;
+
+  if (!ticketId) return res.status(400).json({ error: 'ticketId is required.' });
+
+  const tid = parseInt(ticketId, 10);
+  clearCalledTimer(tid);
+
+  try {
+    const updateResult = await pool.query(
+      `UPDATE QueueTickets
+       SET status = 'serving'
+       WHERE ticket_id = $1 AND status = 'called'
+       RETURNING *`,
+      [tid]
+    );
+
+    if (updateResult.rows.length === 0) {
+      return res.status(409).json({ error: 'Ticket is no longer in called state.' });
+    }
+
+    await pool.query(
+      'INSERT INTO ServiceSessions (ticket_id, staff_id) VALUES ($1, $2)',
+      [tid, staffId]
+    );
+
+    await invalidateAll();
+
+    const io = req.app.get('io');
+    if (io) io.emit('queue:update', { type: 'ticket_arrived', ticketId: tid });
+
+    const ticketResult = await pool.query(
+      `SELECT qt.*, s.service_key, c.first_name, c.last_name
+       FROM QueueTickets qt
+       JOIN Services s ON qt.service_id = s.service_id
+       LEFT JOIN Customers c ON qt.TRN = c.TRN
+       WHERE qt.ticket_id = $1`,
+      [tid]
+    );
+
+    res.json({ ticket: mapTicket(ticketResult.rows[0]) });
+  } catch (err) {
+    console.error('Customer arrived error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
+// POST /api/staff/no-show
+// Staff manually marks the on-deck customer as a no-show before the timer fires.
+// Delegates to the same triggerNoShow logic used by the auto-timer.
+router.post('/no-show', authenticateStaff, async (req, res) => {
+  const { ticketId } = req.body;
+  if (!ticketId) return res.status(400).json({ error: 'ticketId is required.' });
+
+  const tid = parseInt(ticketId, 10);
+  clearCalledTimer(tid);
+
+  try {
+    const io = req.app.get('io');
+    await triggerNoShow(tid, io);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('No-show error:', err);
     res.status(500).json({ error: 'Server error.' });
   }
 });
@@ -316,8 +496,9 @@ router.post('/complete', authenticateStaff, async (req, res) => {
   }
 });
 
-// Called once on server startup — rebuilds in-memory timers for any staff
-// still marked as delayed in the DB (survives nodemon restarts / crashes).
+// ── Startup restoration ───────────────────────────────────────────────────────
+
+// Re-arms delay SMS timers for any staff still marked delayed after a restart.
 async function restoreDelayTimers() {
   try {
     const result = await pool.query(
@@ -344,4 +525,36 @@ async function restoreDelayTimers() {
   }
 }
 
-module.exports = { router, restoreDelayTimers };
+// Re-arms on-deck countdown timers for any tickets still in 'called' state after
+// a restart. Uses called_at to calculate remaining hold time; fires immediately
+// for tickets whose 2-minute window already elapsed.
+async function restoreCalledTimers(io) {
+  try {
+    const result = await pool.query(
+      `SELECT ticket_id, called_at
+       FROM QueueTickets
+       WHERE status = 'called' AND called_at IS NOT NULL`
+    );
+
+    if (result.rows.length === 0) return;
+
+    console.log(`[Called timers] Restoring ${result.rows.length} timer(s) after restart`);
+    result.rows.forEach(({ ticket_id, called_at }) => {
+      const elapsed   = Date.now() - new Date(called_at).getTime();
+      const remaining = CALLED_TIMEOUT_MS - elapsed;
+
+      if (remaining <= 0) {
+        // Window already expired — trigger no-show right now
+        triggerNoShow(ticket_id, io);
+      } else {
+        const timeoutId = setTimeout(() => triggerNoShow(ticket_id, io), remaining);
+        calledTimers.set(ticket_id, { timeoutId });
+        console.log(`[Called timers] Restored timer for ticket ${ticket_id}, fires in ${Math.round(remaining / 1000)}s`);
+      }
+    });
+  } catch (err) {
+    console.error('[Called timers] Failed to restore timers on startup:', err);
+  }
+}
+
+module.exports = { router, restoreDelayTimers, restoreCalledTimers };

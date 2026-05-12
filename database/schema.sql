@@ -59,7 +59,7 @@ CREATE TABLE QueueTickets (
     TRN              VARCHAR(20) REFERENCES Customers(TRN) ON DELETE SET NULL,
     service_id       INT NOT NULL REFERENCES Services(service_id),
     status           VARCHAR(20) NOT NULL DEFAULT 'waiting',
-        -- waiting | called | serving | completed | cancelled
+        -- waiting | called (on-deck, 2-min hold) | serving | completed | cancelled
     priority_level   VARCHAR(20) NOT NULL DEFAULT 'regular',
         -- regular | senior | disabled | emergency
     queue_number     VARCHAR(20) NOT NULL,
@@ -71,7 +71,9 @@ CREATE TABLE QueueTickets (
     checkin_time     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     called_at        TIMESTAMP,
     completed_at     TIMESTAMP,
-    cancelled_at     TIMESTAMP
+    cancelled_at     TIMESTAMP,
+    no_show_count    INT NOT NULL DEFAULT 0,
+    no_show_at       TIMESTAMP
 );
 
 -- Service sessions: tracks which staff served which ticket

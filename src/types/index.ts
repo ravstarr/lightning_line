@@ -13,6 +13,8 @@ export interface Ticket {
   position: number;
   status: TicketStatus;
   createdAt: Date;
+  calledAt?: Date | string;
+  noShowCount?: number;
   qrCode: string;
   counterAssigned?: number;
 }
