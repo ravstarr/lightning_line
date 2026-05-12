@@ -19,8 +19,8 @@ const StaffLoginPage: React.FC = () => {
       const response = await loginStaff(staffId, password);
       const { token, staff } = response.data;
 
-      localStorage.setItem('staffAuthToken', token);
-      localStorage.setItem('currentStaff', JSON.stringify(staff));
+      sessionStorage.setItem('staffAuthToken', token);
+      sessionStorage.setItem('currentStaff', JSON.stringify(staff));
 
       navigate('/staff/dashboard');
     } catch (err: any) {

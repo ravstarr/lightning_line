@@ -133,9 +133,16 @@ router.post('/', async (req, res) => {
     );
     const avgHandleTime = parseFloat(handleResult.rows[0].avg_handle_time) || 15.0;
 
-    // Ask ML service for a prediction; fall back to static duration if unavailable
-    const mlWait = await getMLPrediction(serviceType, level, position - 1, activeCounters, avgHandleTime);
-    const wait = mlWait || estimatedWait || service.estimated_duration;
+    // Ask ML service for a prediction; fall back to queue-aware estimate if unavailable
+    const queueLength = position - 1; // number of people ahead
+    const mlWait = await getMLPrediction(serviceType, level, queueLength, activeCounters, avgHandleTime);
+    // smartFallback can legitimately be 0 (empty queue = next up), so use ?? not ||
+    const smartFallback = queueLength === 0
+      ? 0
+      : Math.round((queueLength * avgHandleTime) / activeCounters);
+    // Total time = queue wait + service duration (so customer sees full time commitment)
+    const queueWait = mlWait ?? smartFallback;
+    const wait = queueWait + service.estimated_duration;
 
     const insertResult = await pool.query(
       `INSERT INTO QueueTickets

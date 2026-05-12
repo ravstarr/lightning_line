@@ -5,6 +5,58 @@ const { authenticateStaff } = require('../middleware/auth');
 const sms = require('../services/sms');
 const { invalidateAll, invalidateCounters } = require('../config/redis');
 
+// In-memory delay timers — keyed by staffId
+// Each entry sends recurring SMS updates every 10 min until delay clears or customer served
+const delayTimers = new Map();
+
+function clearDelayTimer(staffId) {
+  if (delayTimers.has(staffId)) {
+    clearInterval(delayTimers.get(staffId));
+    delayTimers.delete(staffId);
+  }
+}
+
+async function sendDelayUpdates(staffId, delayMinutes, reason) {
+  try {
+    const result = await pool.query(
+      `SELECT
+         qt.phone,
+         qt.queue_number,
+         qt.estimated_wait,
+         EXTRACT(EPOCH FROM (NOW() - qt.checkin_time)) / 60 AS minutes_waited
+       FROM QueueTickets qt
+       JOIN Services s  ON qt.service_id = s.service_id
+       JOIN Staff    st ON s.service_key = ANY(st.service_types)
+       WHERE st.staff_id = $1
+         AND qt.status   = 'waiting'
+         AND qt.phone    IS NOT NULL`,
+      [staffId]
+    );
+
+    if (result.rows.length === 0) {
+      // No one left waiting — stop sending updates
+      clearDelayTimer(staffId);
+      return;
+    }
+
+    result.rows.forEach((ticket) => {
+      const minutesWaited  = Math.floor(parseFloat(ticket.minutes_waited));
+      const remainingWait  = Math.max(0, ticket.estimated_wait - minutesWaited);
+      const updatedWait    = remainingWait + delayMinutes;
+
+      sms.sendDelayNotification({
+        phone:        ticket.phone,
+        queueNumber:  ticket.queue_number,
+        delayMinutes,
+        reason:       reason || 'unexpected delay',
+        updatedWait,
+      }).catch(console.error);
+    });
+  } catch (err) {
+    console.error('Delay update SMS error:', err);
+  }
+}
+
 function mapTicket(t) {
   const nameParts = [t.first_name, t.last_name].filter(Boolean);
   return {
@@ -114,6 +166,16 @@ router.post('/status', authenticateStaff, async (req, res) => {
     if (io) io.emit('counter:status', { staffId, status, reason, minutes });
 
     invalidateCounters().catch(console.error);
+
+    // Manage recurring delay SMS timer
+    clearDelayTimer(staffId);
+    if (status === 'delayed' && minutes) {
+      // Send immediately, then repeat every 10 minutes until delay clears or customer is served
+      sendDelayUpdates(staffId, minutes, reason);
+      const timer = setInterval(() => sendDelayUpdates(staffId, minutes, reason), 10 * 60 * 1000);
+      delayTimers.set(staffId, timer);
+    }
+
     res.json({ success: true });
   } catch (err) {
     console.error('Staff status error:', err);
@@ -136,41 +198,58 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
     );
     const serviceIds = servicesResult.rows.map((s) => s.service_id);
 
-    const nextResult = await pool.query(
-      `SELECT qt.ticket_id FROM QueueTickets qt
-       WHERE qt.service_id = ANY($1) AND qt.status = 'waiting'
-       ORDER BY (
-         EXTRACT(EPOCH FROM (NOW() - qt.checkin_time)) +
-         CASE qt.priority_level
-           WHEN 'emergency' THEN 7200
-           WHEN 'disabled'  THEN 3600
-           WHEN 'senior'    THEN 1800
-           ELSE 0
-         END
-       ) DESC
-       LIMIT 1`,
-      [serviceIds]
-    );
+    // Wrap in a transaction with SELECT FOR UPDATE SKIP LOCKED so two counters
+    // calling simultaneously each get a different ticket — no double-assignment.
+    const client = await pool.connect();
+    let ticketId;
+    try {
+      await client.query('BEGIN');
 
-    if (nextResult.rows.length === 0) {
-      return res.json({ ticket: null, message: 'No tickets in queue.' });
+      const nextResult = await client.query(
+        `SELECT qt.ticket_id FROM QueueTickets qt
+         WHERE qt.service_id = ANY($1) AND qt.status = 'waiting'
+         ORDER BY (
+           EXTRACT(EPOCH FROM (NOW() - qt.checkin_time)) +
+           CASE qt.priority_level
+             WHEN 'emergency' THEN 7200
+             WHEN 'disabled'  THEN 3600
+             WHEN 'senior'    THEN 1800
+             ELSE 0
+           END
+         ) DESC
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED`,
+        [serviceIds]
+      );
+
+      if (nextResult.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.json({ ticket: null, message: 'No tickets in queue.' });
+      }
+
+      ticketId = nextResult.rows[0].ticket_id;
+
+      // Mark as serving and assign counter
+      await client.query(
+        `UPDATE QueueTickets
+         SET status = 'serving', counter_assigned = $1, called_at = NOW()
+         WHERE ticket_id = $2`,
+        [counterId, ticketId]
+      );
+
+      // Open a service session
+      await client.query(
+        'INSERT INTO ServiceSessions (ticket_id, staff_id) VALUES ($1, $2)',
+        [ticketId, staffId]
+      );
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      throw txErr;
+    } finally {
+      client.release();
     }
-
-    const ticketId = nextResult.rows[0].ticket_id;
-
-    // Mark as serving and assign counter
-    await pool.query(
-      `UPDATE QueueTickets
-       SET status = 'serving', counter_assigned = $1, called_at = NOW()
-       WHERE ticket_id = $2`,
-      [counterId, ticketId]
-    );
-
-    // Open a service session
-    await pool.query(
-      'INSERT INTO ServiceSessions (ticket_id, staff_id) VALUES ($1, $2)',
-      [ticketId, staffId]
-    );
 
     const ticketResult = await pool.query(
       `SELECT qt.*, s.service_key, c.first_name, c.last_name

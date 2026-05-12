@@ -7,12 +7,14 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Attach JWT to every request — use role-specific key to avoid tab conflicts
+// Attach JWT to every request.
+// Admin token lives in localStorage (shared, one admin at a time).
+// Staff token lives in sessionStorage (per-tab, so multiple counters can be open simultaneously).
 api.interceptors.request.use((config) => {
   const isAdminRoute = config.url?.includes('/admin/');
   const token = isAdminRoute
     ? localStorage.getItem('adminAuthToken')
-    : localStorage.getItem('staffAuthToken');
+    : sessionStorage.getItem('staffAuthToken');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -81,5 +83,6 @@ export const updateCounterStatus = (counterId: number, status: string) =>
 
 // ── Queue ─────────────────────────────────────────────────────────────────
 export const getQueueMetrics = () => api.get('/queue/metrics');
+export const getQueueEstimates = () => api.get('/queue/estimates');
 
 export default api;

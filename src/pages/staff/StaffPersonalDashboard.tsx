@@ -37,7 +37,7 @@ const StaffPersonalDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const staffData = localStorage.getItem('currentStaff');
+    const staffData = sessionStorage.getItem('currentStaff');
     if (!staffData) {
       navigate('/staff/login');
       return;
@@ -66,8 +66,8 @@ const StaffPersonalDashboard: React.FC = () => {
   }, [navigate, refreshQueue]);
 
   const handleLogout = () => {
-    localStorage.removeItem('staffAuthToken');
-    localStorage.removeItem('currentStaff');
+    sessionStorage.removeItem('staffAuthToken');
+    sessionStorage.removeItem('currentStaff');
     navigate('/staff/login');
   };
 

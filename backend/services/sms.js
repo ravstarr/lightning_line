@@ -61,13 +61,16 @@ async function sendTicketCalled({ phone, queueNumber, counterId }) {
 }
 
 // Sent when a delay is reported that affects the customer
-async function sendDelayNotification({ phone, queueNumber, delayMinutes, reason }) {
+async function sendDelayNotification({ phone, queueNumber, delayMinutes, reason, updatedWait }) {
   if (!phone) return;
+  const waitLine = updatedWait != null
+    ? `Your updated estimated wait is approximately ${updatedWait} min.`
+    : `Your estimated wait has been updated.`;
   await send(phone,
     `Lightning Line\n` +
     `Update for ticket ${queueNumber}:\n` +
     `There is a ${delayMinutes}-min delay (${reason}).\n` +
-    `Your estimated wait has been updated.`
+    waitLine
   );
 }
 

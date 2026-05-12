@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { SERVICE_TYPES } from '../../utils/constants';
 import { createTicket } from '../../store/queueSlice';
 import { useAppDispatch } from '../../store/hooks';
 import Logo from '../Logo';
+import { getQueueEstimates } from '../../services/api';
 
 interface ServiceSelectionProps {
   onServiceSelect: (serviceType: string) => void;
@@ -17,6 +18,19 @@ const ServiceSelection: React.FC<ServiceSelectionProps> = ({ onServiceSelect }) 
   const { trn, phone, name, dob, hasDisability, isPriority, priorityType } = location.state || {};
   const [selectedService, setSelectedService] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [estimates, setEstimates] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    getQueueEstimates()
+      .then((res) => {
+        const map: Record<string, number> = {};
+        res.data.estimates.forEach((e: { serviceKey: string; estimatedWait: number }) => {
+          map[e.serviceKey] = e.estimatedWait;
+        });
+        setEstimates(map);
+      })
+      .catch(() => {}); // silently fall back to static times if unavailable
+  }, []);
 
   const handleServiceSelect = (serviceId: string) => {
     setSelectedService(serviceId);
@@ -86,18 +100,22 @@ const ServiceSelection: React.FC<ServiceSelectionProps> = ({ onServiceSelect }) 
                     {service.name}
                   </h3>
                   <p className="text-skyblue-300 mb-3">{service.description}</p>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-500">
-                      Est. time: {service.estimatedTime} min
-                    </span>
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
-                      service.estimatedTime <= 15 ? 'bg-green-800 text-green-200' : 
-                      service.estimatedTime <= 25 ? 'bg-yellow-800 text-yellow-200' : 'bg-red-800 text-red-200'
-                    }`}>
-                      {service.estimatedTime <= 15 ? 'Fast' :
-                       service.estimatedTime <= 25 ? 'Medium' : 'Long'}
-                    </span>
-                  </div>
+                  {(() => {
+                    const wait = estimates[service.id] ?? service.estimatedTime;
+                    return (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-gray-500">
+                          Est. wait: {wait === 0 ? 'Next up!' : `${wait} min`}
+                        </span>
+                        <span className={`px-2 py-1 rounded text-xs font-medium ${
+                          wait <= 15 ? 'bg-green-800 text-green-200' :
+                          wait <= 25 ? 'bg-yellow-800 text-yellow-200' : 'bg-red-800 text-red-200'
+                        }`}>
+                          {wait === 0 ? 'Now' : wait <= 15 ? 'Fast' : wait <= 25 ? 'Medium' : 'Long'}
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -117,7 +135,10 @@ const ServiceSelection: React.FC<ServiceSelectionProps> = ({ onServiceSelect }) 
               <div className="text-right">
                 <p className="text-sm text-skyblue-300">Estimated Wait</p>
                 <p className="text-2xl font-bold text-aqua-400">
-                  {isPriority ? '5-10' : '15-25'} minutes
+                  {(() => {
+                    const wait = estimates[selectedService] ?? SERVICE_TYPES.find(s => s.id === selectedService)?.estimatedTime ?? 15;
+                    return wait === 0 ? 'Next up!' : `${wait} min`;
+                  })()}
                 </p>
               </div>
             </div>
