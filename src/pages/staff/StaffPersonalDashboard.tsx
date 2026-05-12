@@ -66,7 +66,7 @@ const StaffPersonalDashboard: React.FC = () => {
   }, [navigate, refreshQueue]);
 
   const handleLogout = () => {
-    localStorage.removeItem('authToken');
+    localStorage.removeItem('staffAuthToken');
     localStorage.removeItem('currentStaff');
     navigate('/staff/login');
   };

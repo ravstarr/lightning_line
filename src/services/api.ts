@@ -7,9 +7,12 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
-// Attach JWT to every request
+// Attach JWT to every request — use role-specific key to avoid tab conflicts
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('authToken');
+  const isAdminRoute = config.url?.includes('/admin/');
+  const token = isAdminRoute
+    ? localStorage.getItem('adminAuthToken')
+    : localStorage.getItem('staffAuthToken');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }

@@ -62,7 +62,7 @@ const AdminDashboard: React.FC = () => {
   }, [admin, navigate, fetchData]);
 
   const handleLogout = () => {
-    localStorage.removeItem('authToken');
+    localStorage.removeItem('adminAuthToken');
     localStorage.removeItem('currentAdmin');
     navigate('/admin/login');
   };
@@ -167,6 +167,13 @@ const AdminDashboard: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-sm text-skyblue-300 mb-2">{counter.staffName}</p>
+                        {counter.delay?.reason && (
+                          <p className="text-xs text-yellow-300 mb-2 italic">
+                            {counter.status === 'delayed'
+                              ? `Delayed: ${counter.delay.reason}${counter.delay.estimatedMinutes ? ` (~${counter.delay.estimatedMinutes} min)` : ''}`
+                              : `On break: ${counter.delay.reason}`}
+                          </p>
+                        )}
                         <p className="text-xs text-gray-500">
                           Current: {counter.currentTicket || 'None'}
                         </p>
@@ -233,6 +240,13 @@ const AdminDashboard: React.FC = () => {
                             }`}>
                               {counter.status}
                             </span>
+                            {counter.delay?.reason && (
+                              <p className="text-xs text-yellow-300 mt-1 italic">
+                                {counter.status === 'delayed'
+                                  ? `${counter.delay.reason}${counter.delay.estimatedMinutes ? ` (~${counter.delay.estimatedMinutes} min)` : ''}`
+                                  : counter.delay.reason}
+                              </p>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-white">{counter.currentTicket || '-'}</td>
                           <td className="px-4 py-3 text-skyblue-300 text-sm">

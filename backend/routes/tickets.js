@@ -147,10 +147,10 @@ router.post('/', async (req, res) => {
 
     const ticket = insertResult.rows[0];
 
+    await invalidateStatsAndTickets();
+
     const io = req.app.get('io');
     if (io) io.emit('queue:update', { type: 'new_ticket', ticketId: ticket.ticket_id });
-
-    invalidateStatsAndTickets().catch(console.error);
 
     // Send confirmation SMS (non-blocking)
     sms.sendTicketConfirmation({

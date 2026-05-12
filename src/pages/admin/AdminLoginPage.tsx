@@ -19,7 +19,7 @@ const AdminLoginPage: React.FC = () => {
       const response = await loginAdmin(username, password);
       const { token, admin } = response.data;
 
-      localStorage.setItem('authToken', token);
+      localStorage.setItem('adminAuthToken', token);
       localStorage.setItem('currentAdmin', JSON.stringify(admin));
 
       navigate('/admin/dashboard');

@@ -99,14 +99,15 @@ router.post('/status', authenticateStaff, async (req, res) => {
   if (!status) return res.status(400).json({ error: 'Status is required.' });
 
   try {
+    const delayStartedAt = status === 'delayed' ? new Date() : null;
     await pool.query(
       `UPDATE Staff SET
          status = $1,
          delay_reason = $2,
          delay_minutes = $3,
-         delay_started_at = CASE WHEN $1 = 'delayed' THEN NOW() ELSE NULL END
-       WHERE staff_id = $4`,
-      [status, reason || null, minutes || null, staffId]
+         delay_started_at = $4
+       WHERE staff_id = $5`,
+      [status, reason || null, minutes || null, delayStartedAt, staffId]
     );
 
     const io = req.app.get('io');
@@ -183,13 +184,13 @@ router.post('/call-next', authenticateStaff, async (req, res) => {
     const ticket = ticketResult.rows[0];
     const mapped = mapTicket(ticket);
 
+    await invalidateAll();
+
     const io = req.app.get('io');
     if (io) {
       io.emit('ticket:called', { ticketId, counterId, queueNumber: ticket.queue_number });
       io.emit('queue:update', { type: 'ticket_called', ticketId });
     }
-
-    invalidateAll().catch(console.error);
 
     // Notify customer via SMS (non-blocking)
     sms.sendTicketCalled({
@@ -224,10 +225,11 @@ router.post('/complete', authenticateStaff, async (req, res) => {
       [ticketId, staffId]
     );
 
+    await invalidateAll();
+
     const io = req.app.get('io');
     if (io) io.emit('queue:update', { type: 'ticket_completed', ticketId });
 
-    invalidateAll().catch(console.error);
     res.json({ success: true });
   } catch (err) {
     console.error('Complete service error:', err);
