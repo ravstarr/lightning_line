@@ -51,10 +51,12 @@ async function startServer() {
   app.use(cors({ origin: FRONTEND_URL }));
   app.use(express.json());
 
+  const { router: staffRouter, restoreDelayTimers } = require('./routes/staff');
+
   app.use('/api/auth',      require('./routes/auth'));
   app.use('/api/customers', require('./routes/customers'));
   app.use('/api/tickets',   require('./routes/tickets'));
-  app.use('/api/staff',     require('./routes/staff'));
+  app.use('/api/staff',     staffRouter);
   app.use('/api/admin',     require('./routes/admin'));
   app.use('/api/queue',     require('./routes/queue'));
 
@@ -76,5 +78,7 @@ async function startServer() {
   server.listen(PORT, () => {
     const label = CLUSTER_MODE ? `Worker ${process.pid}` : 'Server';
     console.log(`[${label}] Lightning Line backend running on port ${PORT}`);
+    // Re-arm any delay timers that were active before this restart
+    restoreDelayTimers().catch(console.error);
   });
 }

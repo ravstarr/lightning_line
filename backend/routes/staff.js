@@ -316,4 +316,32 @@ router.post('/complete', authenticateStaff, async (req, res) => {
   }
 });
 
-module.exports = router;
+// Called once on server startup — rebuilds in-memory timers for any staff
+// still marked as delayed in the DB (survives nodemon restarts / crashes).
+async function restoreDelayTimers() {
+  try {
+    const result = await pool.query(
+      `SELECT staff_id, delay_minutes, delay_reason
+       FROM Staff
+       WHERE status = 'delayed' AND delay_minutes IS NOT NULL`
+    );
+
+    if (result.rows.length === 0) return;
+
+    console.log(`[Delay timers] Restoring ${result.rows.length} timer(s) after restart`);
+    result.rows.forEach(({ staff_id, delay_minutes, delay_reason }) => {
+      clearDelayTimer(staff_id);
+      sendDelayUpdates(staff_id, delay_minutes, delay_reason);
+      const timer = setInterval(
+        () => sendDelayUpdates(staff_id, delay_minutes, delay_reason),
+        10 * 60 * 1000
+      );
+      delayTimers.set(staff_id, timer);
+      console.log(`[Delay timers] Restored timer for staff_id ${staff_id}`);
+    });
+  } catch (err) {
+    console.error('[Delay timers] Failed to restore timers on startup:', err);
+  }
+}
+
+module.exports = { router, restoreDelayTimers };
