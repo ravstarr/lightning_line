@@ -103,6 +103,8 @@ export const updateStaffServices = (staffId: number, serviceTypes: string[]) =>
 export const removeStaff = (staffId: number) =>
   api.delete(`/admin/staff/${staffId}`);
 
+export const getAdminAnalytics = () => api.get('/admin/analytics');
+
 // ── Queue ─────────────────────────────────────────────────────────────────
 export const getQueueMetrics = () => api.get('/queue/metrics');
 export const getQueueEstimates = () => api.get('/queue/estimates');

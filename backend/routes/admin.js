@@ -264,4 +264,90 @@ router.delete('/staff/:staffId', authenticateAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/analytics — metrics for the analytics dashboard tab
+router.get('/analytics', authenticateAdmin, async (req, res) => {
+  try {
+    // Average wait time and handle time per service type (today)
+    const serviceMetrics = await pool.query(`
+      SELECT
+        s.service_key,
+        COUNT(*)                                                        AS total,
+        ROUND(AVG(EXTRACT(EPOCH FROM (qt.called_at - qt.checkin_time)) / 60))
+                                                                        AS avg_wait_mins,
+        ROUND(AVG(EXTRACT(EPOCH FROM (ss.end_time - ss.start_time)) / 60))
+                                                                        AS avg_handle_mins
+      FROM QueueTickets qt
+      JOIN Services s ON qt.service_id = s.service_id
+      LEFT JOIN ServiceSessions ss ON ss.ticket_id = qt.ticket_id AND ss.end_time IS NOT NULL
+      WHERE DATE(qt.checkin_time) = CURRENT_DATE
+        AND qt.status = 'completed'
+      GROUP BY s.service_key
+      ORDER BY total DESC
+    `);
+
+    // Tickets completed per hour (throughput — today only)
+    const throughput = await pool.query(`
+      SELECT
+        EXTRACT(HOUR FROM completed_at)::int AS hour,
+        COUNT(*)                             AS count
+      FROM QueueTickets
+      WHERE DATE(checkin_time) = CURRENT_DATE
+        AND status = 'completed'
+        AND completed_at IS NOT NULL
+      GROUP BY hour
+      ORDER BY hour
+    `);
+
+    // Per-counter performance (today)
+    const counterPerf = await pool.query(`
+      SELECT
+        st.first_name || ' ' || st.last_name  AS staff_name,
+        st.counter_id,
+        COUNT(ss.session_id)                   AS tickets_served,
+        ROUND(AVG(EXTRACT(EPOCH FROM (ss.end_time - ss.start_time)) / 60))
+                                               AS avg_handle_mins
+      FROM Staff st
+      JOIN ServiceSessions ss ON ss.staff_id = st.staff_id
+      WHERE DATE(ss.start_time) = CURRENT_DATE
+        AND ss.end_time IS NOT NULL
+      GROUP BY st.staff_id, st.first_name, st.last_name, st.counter_id
+      ORDER BY tickets_served DESC
+    `);
+
+    // No-show rate today
+    const noShowStats = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE no_show_count > 0)  AS had_no_show,
+        COUNT(*)                                    AS total
+      FROM QueueTickets
+      WHERE DATE(checkin_time) = CURRENT_DATE
+    `);
+
+    // Fill in missing hours with 0 for the chart (0-23)
+    const throughputMap = new Map(
+      throughput.rows.map((r) => [parseInt(r.hour), parseInt(r.count)])
+    );
+    const throughputFull = Array.from({ length: 24 }, (_, h) => ({
+      hour: `${h}:00`,
+      tickets: throughputMap.get(h) || 0,
+    }));
+
+    const ns = noShowStats.rows[0];
+    const noShowRate = ns.total > 0
+      ? Math.round((ns.had_no_show / ns.total) * 100)
+      : 0;
+
+    res.json({
+      serviceMetrics: serviceMetrics.rows,
+      throughput: throughputFull,
+      counterPerformance: counterPerf.rows,
+      noShowRate,
+      totalToday: parseInt(ns.total),
+    });
+  } catch (err) {
+    console.error('Analytics error:', err);
+    res.status(500).json({ error: 'Server error.' });
+  }
+});
+
 module.exports = router;

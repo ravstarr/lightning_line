@@ -8,8 +8,12 @@ import {
   createStaff,
   updateStaffServices,
   removeStaff,
+  getAdminAnalytics,
 } from '../../services/api';
 import { getSocket, disconnectSocket } from '../../services/socket';
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from 'recharts';
 
 const ALL_SERVICES = ['payments', 'documents', 'inquiries', 'registration', 'other'];
 
@@ -23,7 +27,8 @@ const AdminDashboard: React.FC = () => {
       return null;
     }
   });
-  const [activeTab, setActiveTab] = useState<'overview' | 'staff' | 'customers'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'staff' | 'customers' | 'analytics'>('overview');
+  const [analytics, setAnalytics] = useState<any>(null);
   const [counters, setCounters] = useState<any[]>([]);
   const [tickets, setTickets] = useState<any[]>([]);
   const [stats, setStats] = useState({ waiting: 0, serving: 0, completed: 0, priority: 0 });
@@ -47,14 +52,16 @@ const AdminDashboard: React.FC = () => {
 
   const fetchData = useCallback(async () => {
     try {
-      const [statsRes, countersRes, ticketsRes] = await Promise.all([
+      const [statsRes, countersRes, ticketsRes, analyticsRes] = await Promise.all([
         getAdminStats(),
         getAdminCounters(),
         getAdminTickets(),
+        getAdminAnalytics(),
       ]);
       setStats(statsRes.data);
       setCounters(countersRes.data.counters || []);
       setTickets(ticketsRes.data.tickets || []);
+      setAnalytics(analyticsRes.data);
     } catch (err) {
       console.error('Error fetching admin data:', err);
     }
@@ -221,7 +228,7 @@ const AdminDashboard: React.FC = () => {
         {/* Tabs */}
         <div className="bg-darkblue-800 border border-skyblue-700 rounded-lg mb-6">
           <div className="flex border-b border-skyblue-700">
-            {(['overview', 'staff', 'customers'] as const).map((tab) => (
+            {(['overview', 'staff', 'customers', 'analytics'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -231,7 +238,7 @@ const AdminDashboard: React.FC = () => {
                     : 'text-skyblue-300 hover:text-skyblue-200'
                 }`}
               >
-                {tab === 'staff' ? 'Staff Management' : tab === 'customers' ? 'Customer Queue' : 'Overview'}
+                {tab === 'staff' ? 'Staff Management' : tab === 'customers' ? 'Customer Queue' : tab === 'analytics' ? 'Analytics' : 'Overview'}
               </button>
             ))}
           </div>
@@ -441,6 +448,113 @@ const AdminDashboard: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+            {/* Analytics Tab */}
+            {activeTab === 'analytics' && (
+              <div className="space-y-8">
+                {!analytics ? (
+                  <p className="text-skyblue-400 text-center py-12">Loading analytics...</p>
+                ) : (
+                  <>
+                    {/* Summary cards */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {[
+                        { label: 'Tickets Today',  value: analytics.totalToday },
+                        { label: 'No-Show Rate',   value: `${analytics.noShowRate}%` },
+                        { label: 'Avg Wait',       value: analytics.serviceMetrics.length > 0
+                            ? `${Math.round(analytics.serviceMetrics.reduce((s: number, m: any) => s + (parseFloat(m.avg_wait_mins) || 0), 0) / analytics.serviceMetrics.length)} min`
+                            : '—' },
+                        { label: 'Avg Handle Time', value: analytics.serviceMetrics.length > 0
+                            ? `${Math.round(analytics.serviceMetrics.reduce((s: number, m: any) => s + (parseFloat(m.avg_handle_mins) || 0), 0) / analytics.serviceMetrics.length)} min`
+                            : '—' },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-4 text-center">
+                          <p className="text-sm text-skyblue-300 mb-1">{label}</p>
+                          <p className="text-2xl font-bold text-aqua-400">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Throughput chart */}
+                    <div className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-6">
+                      <h3 className="text-lg font-semibold text-white mb-4">Tickets Completed Per Hour</h3>
+                      <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={analytics.throughput} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#1e3a5f" />
+                          <XAxis dataKey="hour" tick={{ fill: '#7eb8d4', fontSize: 11 }} interval={2} />
+                          <YAxis tick={{ fill: '#7eb8d4', fontSize: 11 }} allowDecimals={false} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: '#0d1b2a', border: '1px solid #1e3a5f', borderRadius: 8 }}
+                            labelStyle={{ color: '#7eb8d4' }}
+                            itemStyle={{ color: '#38bdf8' }}
+                          />
+                          <Bar dataKey="tickets" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+
+                    {/* Per-service breakdown */}
+                    {analytics.serviceMetrics.length > 0 && (
+                      <div className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-6">
+                        <h3 className="text-lg font-semibold text-white mb-4">By Service Type</h3>
+                        <table className="min-w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-skyblue-700">
+                              <th className="pb-2 text-left text-skyblue-300">Service</th>
+                              <th className="pb-2 text-right text-skyblue-300">Completed</th>
+                              <th className="pb-2 text-right text-skyblue-300">Avg Wait</th>
+                              <th className="pb-2 text-right text-skyblue-300">Avg Handle</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analytics.serviceMetrics.map((m: any) => (
+                              <tr key={m.service_key} className="border-b border-skyblue-800">
+                                <td className="py-2 text-white capitalize">{m.service_key}</td>
+                                <td className="py-2 text-right text-aqua-400">{m.total}</td>
+                                <td className="py-2 text-right text-white">{m.avg_wait_mins ?? '—'} min</td>
+                                <td className="py-2 text-right text-white">{m.avg_handle_mins ?? '—'} min</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Per-counter performance */}
+                    {analytics.counterPerformance.length > 0 && (
+                      <div className="bg-darkblue-700 border border-skyblue-700 rounded-lg p-6">
+                        <h3 className="text-lg font-semibold text-white mb-4">Counter Performance</h3>
+                        <table className="min-w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-skyblue-700">
+                              <th className="pb-2 text-left text-skyblue-300">Counter</th>
+                              <th className="pb-2 text-left text-skyblue-300">Staff</th>
+                              <th className="pb-2 text-right text-skyblue-300">Served</th>
+                              <th className="pb-2 text-right text-skyblue-300">Avg Handle</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analytics.counterPerformance.map((c: any) => (
+                              <tr key={c.counter_id} className="border-b border-skyblue-800">
+                                <td className="py-2 text-white">Counter {c.counter_id}</td>
+                                <td className="py-2 text-white">{c.staff_name}</td>
+                                <td className="py-2 text-right text-aqua-400">{c.tickets_served}</td>
+                                <td className="py-2 text-right text-white">{c.avg_handle_mins ?? '—'} min</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {analytics.serviceMetrics.length === 0 && analytics.counterPerformance.length === 0 && (
+                      <p className="text-center text-skyblue-400 py-8">
+                        No completed tickets yet today — check back once customers have been served.
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
             )}
           </div>
